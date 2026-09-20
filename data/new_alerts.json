@@ -1,14 +1,8 @@
 [
   {
-    "id": "starknet",
-    "ticker": "STRK",
-    "score": 80.5,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "sonic-3",
-    "ticker": "S",
-    "score": 79.7,
+    "id": "optimism",
+    "ticker": "OP",
+    "score": 77.9,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
