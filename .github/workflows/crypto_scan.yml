@@ -4,8 +4,33 @@ on:
   workflow_dispatch:
   schedule:
     # Four daily scans, deliberately not on the top of the hour to reduce scheduling congestion.
-    - cron: '7 6,12,18,23 * * *'
-      timezone: 'Europe/London'
+    #- cron: '7 6,12,18,23 * * *'
+  
+  - cron: '7 00 * * *'
+  - cron: '7 1 * * *'
+  - cron: '7 2 * * *'
+  - cron: '7 3 * * *'
+  - cron: '7 4 * * *'    
+  - cron: '7 5 * * *'
+  - cron: '7 6 * * *'
+  - cron: '7 7 * * *'
+  - cron: '7 8 * * *'
+  - cron: '7 9 * * *'
+  - cron: '7 10 * * *'
+  - cron: '7 11 * * *'
+  - cron: '7 12 * * *'
+  - cron: '7 13 * * *'
+  - cron: '7 14 * * *'
+  - cron: '7 15 * * *'
+  - cron: '7 16 * * *'
+  - cron: '7 17 * * *'
+  - cron: '7 18 * * *'
+  - cron: '7 19 * * *'
+  - cron: '7 20 * * *'
+  - cron: '7 21 * * *'
+  - cron: '7 22 * * *'
+  - cron: '7 23 * * *'
+timezone: 'Europe/London'
 
 permissions:
   contents: write
