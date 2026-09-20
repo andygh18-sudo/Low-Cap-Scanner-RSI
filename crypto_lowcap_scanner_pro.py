@@ -87,6 +87,17 @@ def stoch_rsi(values, rsi_len=14, stoch_len=14, k_len=3, d_len=3):
     return float(k.iloc[-1]), float(d.iloc[-1])
 
 @st.cache_data(ttl=300)
+def daily_stochrsi(coin_id):
+    """Daily StochRSI calculated from completed CoinGecko-derived daily closes."""
+    try:
+        d = cg_daily_ohlc_from_market_chart(coin_id, 90)
+        if d.empty or len(d) < 40:
+            return np.nan, np.nan
+        return stoch_rsi(d["close"])
+    except Exception:
+        return np.nan, np.nan
+
+@st.cache_data(ttl=300)
 def cg_daily_ohlc_from_market_chart(coin_id, days=90):
     """Build completed daily OHLC candles from CoinGecko market-chart prices.
 
