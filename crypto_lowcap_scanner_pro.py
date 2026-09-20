@@ -4,6 +4,7 @@ import numpy as np
 import requests
 import ccxt
 from datetime import datetime, timezone
+from rsi_engine import multi_timeframe_rsi, weighted_rsi
 
 st.set_page_config(page_title="Crypto Low-Cap Pro Scanner", page_icon="₿", layout="wide")
 
@@ -30,49 +31,15 @@ def exchange_ohlcv(exchange_name, symbol, timeframe, limit=250):
     return ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
 def rsi(x, n=14):
-    s=pd.Series(x,dtype=float); d=s.diff()
-    g=d.clip(lower=0); l=-d.clip(upper=0)
+    s=pd.Series(x,dtype=float).dropna()
+    if len(s)<n+1:return np.nan
+    d=s.diff(); g=d.clip(lower=0); l=-d.clip(upper=0)
     ag=g.ewm(alpha=1/n,adjust=False,min_periods=n).mean()
     al=l.ewm(alpha=1/n,adjust=False,min_periods=n).mean()
     rs=ag/al.replace(0,np.nan)
     z=100-(100/(1+rs))
+    z=z.where(~((al==0)&(ag>0)),100.0)
     return float(z.iloc[-1]) if pd.notna(z.iloc[-1]) else np.nan
-
-def cls(v):
-    if pd.isna(v): return "N/A"
-    if v<20:return "Extreme Oversold"
-    if v<30:return "Oversold"
-    if v<40:return "Weak"
-    if v<60:return "Neutral"
-    if v<70:return "Strong"
-    if v<80:return "Overbought"
-    return "Extreme Overbought"
-
-def timeframe_rsi(coin_id, exchange, tf):
-    symbol_map={"horizen":"ZEN/USDT","zama":"ZAMA/USDT","harmony":"ONE/USDT",
-                "injective-protocol":"INJ/USDT","avalanche-2":"AVAX/USDT",
-                "solana":"SOL/USDT","render-token":"RENDER/USDT",
-                "the-graph":"GRT/USDT","pendle":"PENDLE/USDT","arweave":"AR/USDT"}
-    if coin_id not in symbol_map: return np.nan
-    try:
-        candles=exchange_ohlcv(exchange,symbol_map[coin_id],tf,250)
-        return rsi([x[4] for x in candles])
-    except Exception:
-        return np.nan
-
-def daily_weekly_monthly_rsi(cid):
-    try:
-        data=cg_chart(cid,365)
-        prices=data.get("prices",[])
-        if len(prices)<20:return (np.nan,np.nan,np.nan)
-        idx=pd.to_datetime([x[0] for x in prices],unit="ms",utc=True)
-        s=pd.Series([x[1] for x in prices],index=idx,dtype=float).sort_index()
-        d=rsi(s)
-        w=rsi(s.resample("W").last().dropna()) if len(s)>=70 else np.nan
-        m=rsi(s.resample("ME").last().dropna()) if len(s)>=180 else np.nan
-        return d,w,m
-    except Exception:
-        return (np.nan,np.nan,np.nan)
 
 def signal(row):
     if row["score"]>=75:return "🟢 BREAKOUT CONFIRMATION"
@@ -156,23 +123,7 @@ if run or st.session_state.run:
         rows=[]
         weights={"1H":.05,"4H":.10,"1D":.20,"1W":.25,"1M":.20,"3M":.20}
         for _,x in top.head(10).iterrows():
-            vals={}
-            for tf in ["1H","4H"]:
-                vals[tf]=timeframe_rsi(x.id,exchange,tf.lower())
-            d,w,m=daily_weekly_monthly_rsi(x.id)
-            vals["1D"]=d; vals["1W"]=w; vals["1M"]=m
-            # 3M RSI from quarterly calendar resampling of CoinGecko history.
-            try:
-                data=cg_chart(x.id, "max")
-                prices=data.get("prices",[])
-                if len(prices) >= 365:
-                    idx=pd.to_datetime([z[0] for z in prices],unit="ms",utc=True)
-                    s3=pd.Series([z[1] for z in prices],index=idx,dtype=float).sort_index()
-                    q=s3.resample("QE").last().dropna()
-                    vals["3M"]=rsi(q) if len(q)>=15 else np.nan
-                else:
-                    vals["3M"]=np.nan
-            except Exception: vals["3M"]=np.nan
+            vals = multi_timeframe_rsi(str(x["symbol"]).upper())
             usable=[(v,weights[k]) for k,v in vals.items() if pd.notna(v)]
             score=np.average([v for v,w in usable],weights=[w for v,w in usable]) if usable else np.nan
             deep=sum(pd.notna(v) and v<30 for v in vals.values())>=2
@@ -184,7 +135,12 @@ if run or st.session_state.run:
                  "Bearish alignment":bear,"Overbought":over}
             rows.append(row)
         heat=pd.DataFrame(rows)
-        st.dataframe(heat.round(1),use_container_width=True,hide_index=True)
+        display_heat = heat.copy()
+        for col in ["1H","4H","1D","1W","1M","3M"]:
+            if col in display_heat.columns:
+                display_heat[col] = display_heat[col].apply(lambda v: "N/A" if pd.isna(v) else round(float(v), 1))
+        st.dataframe(display_heat,use_container_width=True,hide_index=True)
+        st.caption("N/A = insufficient exchange history for a valid RSI-14, not a zero value.")
 
         st.subheader("Crypto regime filter")
         # Simple, transparent regime proxy from BTC 24h/7d and market breadth.
