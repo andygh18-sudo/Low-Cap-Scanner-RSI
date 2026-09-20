@@ -1,4 +1,34 @@
 import streamlit as st
+
+# Dashboard refresh controls
+if "auto_refresh" not in st.session_state:
+    st.session_state.auto_refresh = False
+if "refresh_minutes" not in st.session_state:
+    st.session_state.refresh_minutes = 15
+
+with st.sidebar:
+    st.subheader("🔄 Dashboard Refresh")
+    if st.button("🔄 Refresh Now", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+    st.session_state.auto_refresh = st.checkbox(
+        "Auto Refresh", value=st.session_state.auto_refresh,
+        help="Refresh the dashboard while this browser session is active."
+    )
+    st.session_state.refresh_minutes = st.selectbox(
+        "Refresh every", [5, 10, 15, 30, 60],
+        index=[5, 10, 15, 30, 60].index(st.session_state.refresh_minutes),
+        format_func=lambda x: f"{x} minutes"
+    )
+
+run_every = f"{st.session_state.refresh_minutes}m" if st.session_state.auto_refresh else None
+
+@st.fragment(run_every=run_every, key="dashboard_refresh")
+def _refresh_status():
+    from datetime import datetime
+    st.caption(f"Last dashboard refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+_refresh_status()
 import pandas as pd
 import numpy as np
 import requests
