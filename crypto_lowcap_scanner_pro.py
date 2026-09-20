@@ -87,48 +87,38 @@ def stoch_rsi(values, rsi_len=14, stoch_len=14, k_len=3, d_len=3):
     return float(k.iloc[-1]), float(d.iloc[-1])
 
 @st.cache_data(ttl=300)
-def cg_ohlc_daily(coin_id, days=30):
-    """CoinGecko OHLC data. Demo/free plans return 4-hour candles for 3-30 days; we resample to UTC daily candles."""
-    url=f"{CG}/coins/{coin_id}/ohlc"
-    r=requests.get(url, params={"vs_currency":"usd","days":str(days)}, headers=CG_HEADERS, timeout=30)
+def cg_daily_ohlc_from_market_chart(coin_id, days=90):
+    """Build completed daily OHLC candles from CoinGecko market-chart prices.
+
+    CoinGecko Demo OHLC becomes 4-day candles for ranges above 30 days,
+    which is insufficient for a reliable ADX-14 after daily resampling.
+    Market-chart data is hourly for 2-90 day ranges, so we aggregate the
+    hourly prices into daily open/high/low/close candles.
+    """
+    url=f"{CG}/coins/{coin_id}/market_chart"
+    r=requests.get(url, params={"vs_currency":"usd","days":str(days)},
+                   headers=CG_HEADERS, timeout=30)
     r.raise_for_status()
-    raw=r.json()
-    if not raw:
+    prices=r.json().get("prices",[])
+    if not prices:
         return pd.DataFrame()
-    d=pd.DataFrame(raw, columns=["ts","open","high","low","close"])
+    d=pd.DataFrame(prices, columns=["ts","price"])
     d["ts"]=pd.to_datetime(d["ts"], unit="ms", utc=True)
     d=d.set_index("ts").sort_index()
-    daily=d.resample("1D").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna()
+    daily=d["price"].resample("1D").agg(["first","max","min","last"]).dropna()
+    daily.columns=["open","high","low","close"]
     # Do not use the currently forming UTC day.
     if len(daily)>1:
         daily=daily.iloc[:-1].copy()
     return daily
 
 @st.cache_data(ttl=300)
-def cg_daily_closes(coin_id, days=100):
-    """CoinGecko market-chart hourly data, resampled to daily closes."""
-    url=f"{CG}/coins/{coin_id}/market_chart"
-    r=requests.get(url, params={"vs_currency":"usd","days":str(days),"interval":"hourly"}, headers=CG_HEADERS, timeout=30)
-    r.raise_for_status()
-    prices=r.json().get("prices",[])
-    if not prices:
-        return pd.Series(dtype=float)
-    d=pd.DataFrame(prices, columns=["ts","close"])
-    d["ts"]=pd.to_datetime(d["ts"], unit="ms", utc=True)
-    d=d.set_index("ts").sort_index()["close"].resample("1D").last().dropna()
-    if len(d)>1:
-        d=d.iloc[:-1]
-    return d
+def cg_ohlc_daily(coin_id, days=30):
+    """Return completed daily OHLC using CoinGecko market-chart prices.
 
-@st.cache_data(ttl=300)
-def daily_stochrsi(coin_id):
-    try:
-        closes=cg_daily_closes(coin_id, 100)
-        if len(closes)<40:
-            return np.nan, np.nan
-        return stoch_rsi(closes)
-    except Exception:
-        return np.nan, np.nan
+    This avoids the Demo OHLC endpoint's coarse 4-day candles for >30 days.
+    """
+    return cg_daily_ohlc_from_market_chart(coin_id, max(int(days), 60))
 
 def coin_id_for_row(row):
     return str(row.get("id", ""))
