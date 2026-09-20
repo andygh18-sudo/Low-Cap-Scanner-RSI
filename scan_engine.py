@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 import requests
+from rsi_engine import multi_timeframe_rsi, weighted_rsi
 
 CG='https://api.coingecko.com/api/v3'
 ZEN_ID='horizen'
@@ -36,23 +37,6 @@ def price_series(data):
     if not p: return pd.Series(dtype=float)
     idx=pd.to_datetime([x[0] for x in p],unit='ms',utc=True)
     return pd.Series([x[1] for x in p],index=idx,dtype=float).sort_index()
-
-def rsi(s,n=14):
-    s=pd.Series(s,dtype=float).dropna()
-    if len(s)<n+1:return np.nan
-    d=s.diff(); g=d.clip(lower=0); l=-d.clip(upper=0)
-    ag=g.ewm(alpha=1/n,adjust=False,min_periods=n).mean()
-    al=l.ewm(alpha=1/n,adjust=False,min_periods=n).mean()
-    rs=ag/al.replace(0,np.nan)
-    v=100-(100/(1+rs))
-    return float(v.iloc[-1]) if pd.notna(v.iloc[-1]) else np.nan
-
-def multi_rsi(s):
-    daily=rsi(s)
-    weekly=rsi(s.resample('W').last().dropna()) if len(s)>=90 else np.nan
-    monthly=rsi(s.resample('ME').last().dropna()) if len(s)>=210 else np.nan
-    quarterly=rsi(s.resample('QE').last().dropna()) if len(s)>=365 else np.nan
-    return {'1D':daily,'1W':weekly,'1M':monthly,'3M':quarterly}
 
 def resilience(coin_s, btc_s):
     a=pd.DataFrame({'c':coin_s,'b':btc_s}).dropna()
@@ -96,11 +80,10 @@ def scan():
     for _,x in c.iterrows():
         try:
             s=price_series(chart(x.id,90)); time.sleep(0.8)
-            mr=multi_rsi(s); rr=resilience(s,btc_s)
-            vals=[v for v in mr.values() if pd.notna(v)]
-            weights={'1D':.20,'1W':.25,'1M':.25,'3M':.30}
-            usable=[(mr[k],weights[k]) for k in weights if pd.notna(mr[k])]
-            wrsi=float(np.average([v for v,w in usable],weights=[w for v,w in usable])) if usable else 50
+            mr=multi_timeframe_rsi(str(x['symbol']).upper(), daily_fallback=pd.DataFrame({'close':s}) if not s.empty else None)
+            rr=resilience(s,btc_s)
+            wrsi=weighted_rsi(mr)
+            if pd.isna(wrsi): wrsi=50.0
             # 20 RSI points: constructive zone 45-70, with a mild penalty for extremes.
             rsi_pts=float(np.clip(20-abs(wrsi-57)*0.45,0,20))
             trend_pts=float(np.clip((float(x.price_change_percentage_24h)+5),0,10))
@@ -117,7 +100,7 @@ def scan():
                 'coin':x['name'],'ticker':str(x['symbol']).upper(),'id':x.id,
                 'market_cap_m':float(x.mcap_m),'volume_m':float(x.vol_m),'vol_mcap_pct':float(x.vr),
                 'change_24h_pct':float(x.price_change_percentage_24h),'change_7d_pct':float(x.price_change_percentage_7d_in_currency),
-                'btc_rel_7d_pct':float(x.btc_rel_7d),'rsi_1d':mr['1D'],'rsi_1w':mr['1W'],'rsi_1m':mr['1M'],'rsi_3m':mr['3M'],
+                'btc_rel_7d_pct':float(x.btc_rel_7d),'rsi_1h':mr['1H'],'rsi_4h':mr['4H'],'rsi_1d':mr['1D'],'rsi_1w':mr['1W'],'rsi_1m':mr['1M'],'rsi_3m':mr['3M'],
                 'weighted_rsi':wrsi,'downside_beta':rr['down_beta'],'btc_down_day_rel_pct':rr['down_rel'],
                 'resilience_score':rr['res_score'],'score':score,'signal':status
             })
