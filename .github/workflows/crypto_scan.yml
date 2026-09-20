@@ -30,8 +30,7 @@ on:
   - cron: '7 21 * * *'
   - cron: '7 22 * * *'
   - cron: '7 23 * * *'
-timezone: 'Europe/London'
-
+ timezone: 'Europe/London'
 permissions:
   contents: write
 
