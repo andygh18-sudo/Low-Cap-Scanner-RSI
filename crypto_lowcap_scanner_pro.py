@@ -294,6 +294,56 @@ def signal(row):
     if row["score"]>=45:return "🟡 WATCH / PULLBACK"
     return "🔴 WEAK"
 
+
+@st.cache_data(ttl=300)
+def btc_market_context(exchange_name):
+    """Build BTC benchmark context using the same breakout/momentum tools as the scanner."""
+    try:
+        btc_row = cg_markets()
+        btc_row = btc_row[btc_row["id"] == "bitcoin"]
+        if btc_row.empty:
+            return None
+        b = btc_row.iloc[0]
+        vals = multi_timeframe_rsi("BTC")
+        usable = [(v, {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}[k])
+                  for k, v in vals.items() if pd.notna(v)]
+        wrsi = float(np.average([v for v, w in usable], weights=[w for v, w in usable])) if usable else np.nan
+        sk, sd = daily_stochrsi(exchange_name, "BTC")
+        av, pdi, mdi, ap = daily_adx(exchange_name, "BTC")
+        bm = true_breakout_metrics(exchange_name, "BTC")
+        # BTC is the benchmark, so BTC-relative strength is intentionally not used here.
+        bullish_trend = (pd.notna(av) and av >= 25 and pd.notna(pdi) and pd.notna(mdi) and pdi > mdi)
+        trend_strengthening = bullish_trend and pd.notna(ap) and av > ap
+        if bm.get("daily_breakout") and bm.get("weekly_breakout") and bm.get("volume_confirmed") and bm.get("close_near_high") and bullish_trend and trend_strengthening and pd.notna(wrsi) and wrsi < 75 and pd.notna(sk) and pd.notna(sd) and sk >= 50 and sk > sd:
+            status = "🚀 BTC STRUCTURAL BREAKOUT"
+        elif bullish_trend and trend_strengthening:
+            status = "🟢 BTC STRONGENING BULLISH TREND"
+        elif pd.notna(av) and av >= 25 and pd.notna(mdi) and pd.notna(pdi) and mdi > pdi:
+            status = "🔴 BTC STRONG BEARISH TREND"
+        else:
+            status = "🟡 BTC MIXED / DEVELOPING"
+        return {
+            "price": float(b["current_price"]),
+            "24h": float(b["price_change_percentage_24h"]),
+            "7d": float(b.get("price_change_percentage_7d_in_currency", np.nan)),
+            "mcap_m": float(b["market_cap"]) / 1e6,
+            "volume_m": float(b["total_volume"]) / 1e6,
+            "weighted_rsi": wrsi,
+            "stoch_k": sk,
+            "stoch_d": sd,
+            "adx": av,
+            "plus_di": pdi,
+            "minus_di": mdi,
+            "adx_rising": bool(pd.notna(av) and pd.notna(ap) and av > ap),
+            "daily_breakout": bool(bm.get("daily_breakout")),
+            "weekly_breakout": bool(bm.get("weekly_breakout")),
+            "volume_confirmed": bool(bm.get("volume_confirmed")),
+            "close_near_high": bool(bm.get("close_near_high")),
+            "status": status,
+        }
+    except Exception:
+        return None
+
 st.title("₿ Crypto Low-Cap Pro Scanner")
 st.caption("Background scanner + dashboard: volume surge + BTC-relative strength + RSI + downside resilience")
 
@@ -321,6 +371,39 @@ with st.sidebar:
     exchange=st.selectbox("Exchange candles",["bybit","okx","kraken"],index=0)
     st.caption("Exchange candle access is public; no trading/API key is required.")
     run=st.button("🚀 Run full scanner",type="primary")
+
+    st.divider()
+    st.caption("BTC is always analysed separately as the benchmark and is not subject to the low-cap market-cap filter.")
+
+
+
+# BTC benchmark panel
+try:
+    btc_ctx = btc_market_context(exchange)
+    if btc_ctx:
+        st.subheader("₿ Bitcoin Market Benchmark")
+        bc1,bc2,bc3,bc4,bc5,bc6 = st.columns(6)
+        bc1.metric("BTC Price", f"${btc_ctx['price']:,.0f}")
+        bc2.metric("BTC 24h", f"{btc_ctx['24h']:.2f}%")
+        bc3.metric("BTC 7d", f"{btc_ctx['7d']:.2f}%")
+        bc4.metric("Weighted RSI", f"{btc_ctx['weighted_rsi']:.1f}" if pd.notna(btc_ctx['weighted_rsi']) else "N/A")
+        bc5.metric("ADX-14", f"{btc_ctx['adx']:.1f}" if pd.notna(btc_ctx['adx']) else "N/A")
+        bc6.metric("BTC Signal", btc_ctx['status'])
+        btc_table = pd.DataFrame([{
+            "Daily breakout": btc_ctx["daily_breakout"],
+            "Weekly breakout": btc_ctx["weekly_breakout"],
+            "Volume confirmed": btc_ctx["volume_confirmed"],
+            "Close near high": btc_ctx["close_near_high"],
+            "StochRSI %K": btc_ctx["stoch_k"],
+            "StochRSI %D": btc_ctx["stoch_d"],
+            "+DI": btc_ctx["plus_di"],
+            "-DI": btc_ctx["minus_di"],
+            "ADX rising": btc_ctx["adx_rising"],
+        }])
+        st.dataframe(btc_table.round(1), use_container_width=True, hide_index=True)
+        st.caption("BTC is treated as the benchmark: BTC-relative strength and the low-cap volume/MCap threshold are not applied to BTC itself.")
+except Exception as e:
+    st.warning(f"BTC benchmark unavailable: {e}")
 
 if "run" not in st.session_state: st.session_state.run=True
 
