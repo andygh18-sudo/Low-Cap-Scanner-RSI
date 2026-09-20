@@ -41,6 +41,119 @@ def rsi(x, n=14):
     z=z.where(~((al==0)&(ag>0)),100.0)
     return float(z.iloc[-1]) if pd.notna(z.iloc[-1]) else np.nan
 
+
+def find_market_symbol(ex, ticker):
+    """Return the first usable USDT spot symbol for a ticker."""
+    t = str(ticker).upper()
+    candidates = [f"{t}/USDT", f"{t}/USDT:USDT"]
+    for sym in candidates:
+        if sym in ex.markets:
+            market = ex.markets[sym]
+            if market.get("active", True) and market.get("spot", True):
+                return sym
+    # Fallback: match by base/quote in case the exchange uses a different unified symbol.
+    for sym, market in ex.markets.items():
+        if str(market.get("base", "")).upper() == t and str(market.get("quote", "")).upper() == "USDT" and market.get("spot", True):
+            return sym
+    return None
+
+
+@st.cache_data(ttl=300)
+def true_breakout_metrics(exchange_name, ticker):
+    """
+    Detect a structural TRUE BREAKOUT using public OHLCV candles.
+
+    Daily confirmation:
+      - close >= previous 20-day high * 1.005
+      - current volume >= 1.5x previous 20-day average volume
+      - close is in the top 25% of the candle range
+
+    Weekly confirmation:
+      - weekly close >= previous 20-week high * 1.0025
+
+    Market confirmation is added by the caller:
+      - BTC-relative 7D >= +5 percentage points
+      - volume/market-cap >= 10%
+      - weighted RSI < 75
+
+    Returns metrics even when the final TRUE BREAKOUT condition is false.
+    """
+    out = {
+        "daily_resistance": np.nan, "weekly_resistance": np.nan,
+        "daily_breakout": False, "weekly_breakout": False,
+        "volume_confirmed": False, "close_near_high": False,
+        "true_breakout_data": False, "breakout_exchange": None,
+    }
+    try:
+        ex = getattr(ccxt, exchange_name)({"enableRateLimit": True})
+        ex.load_markets()
+        symbol = find_market_symbol(ex, ticker)
+        if not symbol:
+            return out
+
+        daily = ex.fetch_ohlcv(symbol, timeframe="1d", limit=80)
+        if len(daily) < 25:
+            return out
+
+        d = pd.DataFrame(daily, columns=["ts","open","high","low","close","volume"])
+        # Ignore the currently forming candle.
+        d = d.iloc[:-1].copy() if len(d) > 1 else d
+        if len(d) < 25:
+            return out
+
+        current = d.iloc[-1]
+        prior20 = d.iloc[-21:-1]
+        resistance = float(prior20["high"].max())
+        avg_volume = float(prior20["volume"].mean())
+        candle_range = float(current["high"] - current["low"])
+        close_location = ((float(current["close"]) - float(current["low"])) / candle_range) if candle_range > 0 else 0
+
+        daily_breakout = float(current["close"]) >= resistance * 1.005
+        volume_confirmed = avg_volume > 0 and float(current["volume"]) >= avg_volume * 1.5
+        close_near_high = close_location >= 0.75
+
+        out.update({
+            "daily_resistance": resistance,
+            "daily_breakout": bool(daily_breakout),
+            "volume_confirmed": bool(volume_confirmed),
+            "close_near_high": bool(close_near_high),
+            "breakout_exchange": exchange_name,
+        })
+
+        # Weekly structural confirmation. 80 daily candles can yield ~11 weeks,
+        # so fetch weekly directly when the exchange supports it.
+        try:
+            weekly = ex.fetch_ohlcv(symbol, timeframe="1w", limit=30)
+            if len(weekly) >= 21:
+                w = pd.DataFrame(weekly, columns=["ts","open","high","low","close","volume"])
+                w = w.iloc[:-1].copy() if len(w) > 1 else w
+                if len(w) >= 21:
+                    wc = w.iloc[-1]
+                    wprior = w.iloc[-21:-1]
+                    wres = float(wprior["high"].max())
+                    wbreak = float(wc["close"]) >= wres * 1.0025
+                    out["weekly_resistance"] = wres
+                    out["weekly_breakout"] = bool(wbreak)
+        except Exception:
+            pass
+
+        return out
+    except Exception:
+        return out
+
+
+def is_true_breakout(metrics, btc_rel_7d, volume_mcap, weighted_rsi):
+    """Final TRUE BREAKOUT gate."""
+    return all([
+        bool(metrics.get("daily_breakout")),
+        bool(metrics.get("weekly_breakout")),
+        bool(metrics.get("volume_confirmed")),
+        bool(metrics.get("close_near_high")),
+        pd.notna(btc_rel_7d) and float(btc_rel_7d) >= 5.0,
+        pd.notna(volume_mcap) and float(volume_mcap) >= 10.0,
+        pd.notna(weighted_rsi) and float(weighted_rsi) < 75.0,
+    ])
+
 def signal(row):
     if row["score"]>=75:return "🟢 BREAKOUT CONFIRMATION"
     if row["score"]>=60:return "🟢 MOMENTUM CONFIRMED"
@@ -176,8 +289,19 @@ if run or st.session_state.run:
             raw = rsi_component + trend_component + rel_component + volume_component + liquidity_component + 25
             score = min(100,max(0,raw*regime_adj))
 
-            if score >= 75:
-                status="🟢 BREAKOUT CONFIRMATION"
+            # Structural TRUE BREAKOUT: price + weekly structure + volume + candle quality
+            # + BTC-relative strength + liquidity + RSI confirmation.
+            bm = true_breakout_metrics(exchange, str(x["symbol"]).upper())
+            true_break = is_true_breakout(bm, x["btc_rel_7d"], x["vr"], rs)
+
+            if true_break:
+                status="🚀 TRUE BREAKOUT"
+            elif rs >= 80 and score >= 60:
+                status="🟠 EXTENDED — WAIT FOR RESET"
+            elif float(x["btc_rel_7d"]) > 10 and float(x["vr"]) >= 20 and rs < 70:
+                status="💪 RELATIVE-STRENGTH LEADER"
+            elif score >= 75:
+                status="🟢 STRONG SETUP"
             elif score >= 60:
                 status="🟢 MOMENTUM CONFIRMED"
             elif score >= 45:
@@ -185,17 +309,16 @@ if run or st.session_state.run:
             else:
                 status="🔴 WEAK"
 
-            # Special warnings
-            if rs >= 80 and score >= 60:
-                status="🟠 EXTENDED — WAIT FOR RESET"
-            if float(x["btc_rel_7d"]) > 10 and float(x["vr"]) >= 20 and rs < 70:
-                status="🚀 RELATIVE-STRENGTH BREAKOUT"
-
             final.append([x["name"],x["symbol"].upper(),round(score,1),status,
                           round(rs,1),round(x["btc_rel_7d"],1),round(x["vr"],1),
-                          round(x["price_change_percentage_24h"],1)])
+                          round(x["price_change_percentage_24h"],1),
+                          bm.get("daily_breakout",False), bm.get("weekly_breakout",False),
+                          bm.get("volume_confirmed",False), bm.get("close_near_high",False),
+                          bm.get("daily_resistance",np.nan), bm.get("weekly_resistance",np.nan)])
 
-        finaldf=pd.DataFrame(final,columns=["Coin","Ticker","Score","Signal","Weighted RSI","BTC-rel 7d %","Vol/MCap %","24h %"])
+        finaldf=pd.DataFrame(final,columns=["Coin","Ticker","Score","Signal","Weighted RSI","BTC-rel 7d %","Vol/MCap %","24h %",
+                                             "Daily breakout","Weekly breakout","Volume confirmed","Close near high",
+                                             "Daily resistance","Weekly resistance"])
         finaldf=finaldf.sort_values("Score",ascending=False)
         st.dataframe(finaldf,use_container_width=True,hide_index=True)
 
@@ -203,6 +326,8 @@ if run or st.session_state.run:
         st.markdown("""
         **Score components:** multi-timeframe RSI (20) + trend/momentum (10) + BTC-relative strength (10) +
         volume confirmation (15) + liquidity (5) + base quality (25), then adjusted by the market regime.
+
+        **🚀 TRUE BREAKOUT:** closed above the previous 20-day high by at least 0.5% AND above the previous 20-week high by at least 0.25%, with daily volume at least 1.5× the prior 20-day average, the breakout candle closing in its top 25%, BTC-relative 7D strength ≥ +5 percentage points, volume/market-cap ≥ 10%, and weighted RSI < 75.
 
         **Important:** this is a ranking/filtering engine, not a prediction or buy/sell system.
         A high score means several measured conditions are aligned; it does not guarantee future performance.
