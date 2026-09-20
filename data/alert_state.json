@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "id": "starknet",
+    "ticker": "STRK",
+    "score": 80.5,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "sonic-3",
+    "ticker": "S",
+    "score": 79.7,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  }
+]
