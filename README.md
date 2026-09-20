@@ -1,1 +1,0 @@
-# Low-Cap-Scanner-RSI
