@@ -29,7 +29,6 @@ def _refresh_status():
     st.caption(f"Last dashboard refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 _refresh_status()
-#import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
@@ -61,6 +60,52 @@ def exchange_ohlcv(exchange_name, symbol, timeframe, limit=250):
     ex = getattr(ccxt, exchange_name)({"enableRateLimit": True})
     return ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
+def rsi_series(x, n=14):
+    """Return full Wilder-style RSI series."""
+    s = pd.Series(x, dtype=float)
+    d = s.diff()
+    g = d.clip(lower=0)
+    l = -d.clip(upper=0)
+    ag = g.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
+    al = l.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
+    rs = ag / al.replace(0, np.nan)
+    out = 100 - (100 / (1 + rs))
+    out = out.where(~((al == 0) & (ag > 0)), 100.0)
+    out = out.where(~((al == 0) & (ag == 0)), 50.0)
+    return out
+
+def stoch_rsi(values, rsi_len=14, stoch_len=14, k_len=3, d_len=3):
+    """Return StochRSI %K, %D on a 0-100 scale."""
+    rs = rsi_series(values, rsi_len)
+    low = rs.rolling(stoch_len, min_periods=stoch_len).min()
+    high = rs.rolling(stoch_len, min_periods=stoch_len).max()
+    denom = (high - low).replace(0, np.nan)
+    stoch = ((rs - low) / denom) * 100.0
+    k = stoch.rolling(k_len, min_periods=k_len).mean()
+    d = k.rolling(d_len, min_periods=d_len).mean()
+    if k.dropna().empty or d.dropna().empty:
+        return np.nan, np.nan
+    return float(k.iloc[-1]), float(d.iloc[-1])
+
+@st.cache_data(ttl=300)
+def daily_stochrsi(exchange_name, ticker):
+    """Daily StochRSI using exchange OHLCV, with the current forming candle removed."""
+    try:
+        ex = getattr(ccxt, exchange_name)({"enableRateLimit": True})
+        ex.load_markets()
+        symbol = find_market_symbol(ex, ticker)
+        if not symbol:
+            return np.nan, np.nan
+        candles = ex.fetch_ohlcv(symbol, timeframe="1d", limit=120)
+        if len(candles) > 1:
+            candles = candles[:-1]
+        if len(candles) < 40:
+            return np.nan, np.nan
+        closes = [c[4] for c in candles]
+        return stoch_rsi(closes)
+    except Exception:
+        return np.nan, np.nan
+
 def rsi(x, n=14):
     s=pd.Series(x,dtype=float).dropna()
     if len(s)<n+1:return np.nan
@@ -88,6 +133,59 @@ def find_market_symbol(ex, ticker):
             return sym
     return None
 
+
+def adx_dmi(high, low, close, n=14):
+    """Return Wilder-style ADX, +DI and -DI plus prior ADX for slope."""
+    h = pd.Series(high, dtype=float).reset_index(drop=True)
+    l = pd.Series(low, dtype=float).reset_index(drop=True)
+    c = pd.Series(close, dtype=float).reset_index(drop=True)
+    if len(c) < (2 * n + 2):
+        return np.nan, np.nan, np.nan, np.nan
+
+    up_move = h.diff()
+    down_move = -l.diff()
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0))
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0))
+    tr = pd.concat([
+        h - l,
+        (h - c.shift(1)).abs(),
+        (l - c.shift(1)).abs()
+    ], axis=1).max(axis=1)
+
+    # Wilder smoothing via recursive RMA (equivalent to alpha=1/n EMA after initialization).
+    atr = tr.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
+    p_dm = plus_dm.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
+    m_dm = minus_dm.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
+
+    plus_di = 100 * p_dm / atr.replace(0, np.nan)
+    minus_di = 100 * m_dm / atr.replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    adx = dx.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
+
+    valid = adx.dropna()
+    if len(valid) < 2:
+        return np.nan, np.nan, np.nan, np.nan
+    return (float(adx.iloc[-1]), float(plus_di.iloc[-1]), float(minus_di.iloc[-1]),
+            float(adx.iloc[-2]))
+
+@st.cache_data(ttl=300)
+def daily_adx(exchange_name, ticker):
+    """Daily ADX-14/DMI using closed exchange candles; tries only the selected exchange here."""
+    try:
+        ex = getattr(ccxt, exchange_name)({"enableRateLimit": True})
+        ex.load_markets()
+        symbol = find_market_symbol(ex, ticker)
+        if not symbol:
+            return np.nan, np.nan, np.nan, np.nan
+        candles = ex.fetch_ohlcv(symbol, timeframe="1d", limit=120)
+        if len(candles) > 1:
+            candles = candles[:-1]  # remove forming candle
+        if len(candles) < 35:
+            return np.nan, np.nan, np.nan, np.nan
+        d = pd.DataFrame(candles, columns=["ts","open","high","low","close","volume"])
+        return adx_dmi(d["high"], d["low"], d["close"], 14)
+    except Exception:
+        return np.nan, np.nan, np.nan, np.nan
 
 @st.cache_data(ttl=300)
 def true_breakout_metrics(exchange_name, ticker):
@@ -173,7 +271,7 @@ def true_breakout_metrics(exchange_name, ticker):
         return out
 
 
-def is_true_breakout(metrics, btc_rel_7d, volume_mcap, weighted_rsi):
+def is_true_breakout(metrics, btc_rel_7d, volume_mcap, weighted_rsi, stoch_k, stoch_d, adx_value, plus_di, minus_di, adx_prev):
     """Final TRUE BREAKOUT gate."""
     return all([
         bool(metrics.get("daily_breakout")),
@@ -183,6 +281,11 @@ def is_true_breakout(metrics, btc_rel_7d, volume_mcap, weighted_rsi):
         pd.notna(btc_rel_7d) and float(btc_rel_7d) >= 5.0,
         pd.notna(volume_mcap) and float(volume_mcap) >= 10.0,
         pd.notna(weighted_rsi) and float(weighted_rsi) < 75.0,
+        pd.notna(stoch_k) and pd.notna(stoch_d) and float(stoch_k) > float(stoch_d),
+        pd.notna(stoch_k) and float(stoch_k) >= 50.0,
+        pd.notna(adx_value) and float(adx_value) >= 25.0,
+        pd.notna(adx_prev) and float(adx_value) > float(adx_prev),
+        pd.notna(plus_di) and pd.notna(minus_di) and float(plus_di) > float(minus_di),
     ])
 
 def signal(row):
@@ -285,6 +388,59 @@ if run or st.session_state.run:
                 display_heat[col] = display_heat[col].apply(lambda v: "N/A" if pd.isna(v) else round(float(v), 1))
         st.dataframe(display_heat,use_container_width=True,hide_index=True)
         st.caption("N/A = insufficient exchange history for a valid RSI-14, not a zero value.")
+        st.subheader("Daily StochRSI")
+        stoch_rows = []
+        for _, x in top.head(10).iterrows():
+            k, d = daily_stochrsi(exchange, str(x["symbol"]).upper())
+            if pd.isna(k) or pd.isna(d):
+                stoch_signal = "N/A"
+            elif k < 20 and k > d:
+                stoch_signal = "🟢 OVERSOLD BULLISH CROSS"
+            elif k > 80 and k < d:
+                stoch_signal = "🔴 OVERBOUGHT BEARISH CROSS"
+            elif k > d:
+                stoch_signal = "🟢 BULLISH"
+            else:
+                stoch_signal = "🔴 BEARISH"
+            stoch_rows.append({
+                "Coin": x["name"], "Ticker": str(x["symbol"]).upper(),
+                "StochRSI %K": k, "StochRSI %D": d, "Signal": stoch_signal
+            })
+        stochdf = pd.DataFrame(stoch_rows)
+        if not stochdf.empty:
+            stoch_display = stochdf.copy()
+            for col in ["StochRSI %K", "StochRSI %D"]:
+                stoch_display[col] = stoch_display[col].apply(lambda v: "N/A" if pd.isna(v) else round(float(v), 1))
+            st.dataframe(stoch_display, use_container_width=True, hide_index=True)
+        st.caption("StochRSI uses RSI-14, StochRSI-14, %K 3, %D 3. <20 is oversold; >80 is overbought.")
+
+        st.subheader("Daily ADX / DMI")
+        adx_rows = []
+        for _, x in top.head(10).iterrows():
+            av, pdi, mdi, ap = daily_adx(exchange, str(x["symbol"]).upper())
+            if pd.isna(av):
+                adx_signal = "N/A"
+            elif av >= 25 and pdi > mdi and av > ap:
+                adx_signal = "🟢 STRONG + RISING BULLISH TREND"
+            elif av >= 25 and pdi > mdi:
+                adx_signal = "🟢 STRONG BULLISH TREND"
+            elif av >= 25 and mdi > pdi:
+                adx_signal = "🔴 STRONG BEARISH TREND"
+            elif av >= 20:
+                adx_signal = "🟡 TREND DEVELOPING"
+            else:
+                adx_signal = "⚪ WEAK / RANGE"
+            adx_rows.append({"Coin": x["name"], "Ticker": str(x["symbol"]).upper(),
+                             "ADX-14": av, "+DI": pdi, "-DI": mdi,
+                             "ADX rising": (bool(av > ap) if pd.notna(av) and pd.notna(ap) else False),
+                             "Signal": adx_signal})
+        adxdf = pd.DataFrame(adx_rows)
+        if not adxdf.empty:
+            adx_display = adxdf.copy()
+            for col in ["ADX-14", "+DI", "-DI"]:
+                adx_display[col] = adx_display[col].apply(lambda v: "N/A" if pd.isna(v) else round(float(v), 1))
+            st.dataframe(adx_display, use_container_width=True, hide_index=True)
+        st.caption("ADX-14 measures trend strength; +DI/-DI provide direction. ADX >25 is a common strong-trend reference, while rising ADX indicates strengthening trend.")
 
         st.subheader("Crypto regime filter")
         # Simple, transparent regime proxy from BTC 24h/7d and market breadth.
@@ -317,13 +473,27 @@ if run or st.session_state.run:
             volume_component=min(15,max(0,float(x["vr"])/2))
             liquidity_component=min(5,max(0,float(x["vol_m"])/10))
 
-            raw = rsi_component + trend_component + rel_component + volume_component + liquidity_component + 25
+            # ADX/DMI: 10 points. Reward a strong, rising bullish trend;
+            # do not reward high ADX by itself because ADX has no direction.
+            adx_value, plus_di, minus_di, adx_prev = daily_adx(exchange, str(x["symbol"]).upper())
+            if pd.isna(adx_value):
+                adx_component = 0.0
+            else:
+                strength = np.clip((float(adx_value) - 15.0) / 20.0, 0.0, 1.0)
+                direction = 1.0 if pd.notna(plus_di) and pd.notna(minus_di) and float(plus_di) > float(minus_di) else 0.0
+                rising = 1.0 if pd.notna(adx_prev) and float(adx_value) > float(adx_prev) else 0.5
+                adx_component = 10.0 * strength * direction * rising
+
+            # Components total 100 before regime adjustment.
+            raw = rsi_component + trend_component + rel_component + volume_component + liquidity_component + adx_component + 30
             score = min(100,max(0,raw*regime_adj))
 
             # Structural TRUE BREAKOUT: price + weekly structure + volume + candle quality
-            # + BTC-relative strength + liquidity + RSI confirmation.
+            # + BTC-relative strength + liquidity + RSI + StochRSI + ADX/DMI confirmation.
             bm = true_breakout_metrics(exchange, str(x["symbol"]).upper())
-            true_break = is_true_breakout(bm, x["btc_rel_7d"], x["vr"], rs)
+            stoch_k, stoch_d = daily_stochrsi(exchange, str(x["symbol"]).upper())
+            true_break = is_true_breakout(bm, x["btc_rel_7d"], x["vr"], rs, stoch_k, stoch_d,
+                                           adx_value, plus_di, minus_di, adx_prev)
 
             if true_break:
                 status="🚀 TRUE BREAKOUT"
@@ -345,20 +515,22 @@ if run or st.session_state.run:
                           round(x["price_change_percentage_24h"],1),
                           bm.get("daily_breakout",False), bm.get("weekly_breakout",False),
                           bm.get("volume_confirmed",False), bm.get("close_near_high",False),
-                          bm.get("daily_resistance",np.nan), bm.get("weekly_resistance",np.nan)])
+                          bm.get("daily_resistance",np.nan), bm.get("weekly_resistance",np.nan),
+                          stoch_k, stoch_d, adx_value, plus_di, minus_di, (adx_value > adx_prev if pd.notna(adx_value) and pd.notna(adx_prev) else False)])
 
         finaldf=pd.DataFrame(final,columns=["Coin","Ticker","Score","Signal","Weighted RSI","BTC-rel 7d %","Vol/MCap %","24h %",
                                              "Daily breakout","Weekly breakout","Volume confirmed","Close near high",
-                                             "Daily resistance","Weekly resistance"])
+                                             "Daily resistance","Weekly resistance","StochRSI %K","StochRSI %D",
+                                             "ADX-14","+DI","-DI","ADX rising"])
         finaldf=finaldf.sort_values("Score",ascending=False)
         st.dataframe(finaldf,use_container_width=True,hide_index=True)
 
         st.subheader("Scanner rules")
         st.markdown("""
         **Score components:** multi-timeframe RSI (20) + trend/momentum (10) + BTC-relative strength (10) +
-        volume confirmation (15) + liquidity (5) + base quality (25), then adjusted by the market regime.
+        volume confirmation (15) + liquidity (5) + ADX/DMI trend confirmation (10) + base quality (30), then adjusted by the market regime.
 
-        **🚀 TRUE BREAKOUT:** closed above the previous 20-day high by at least 0.5% AND above the previous 20-week high by at least 0.25%, with daily volume at least 1.5× the prior 20-day average, the breakout candle closing in its top 25%, BTC-relative 7D strength ≥ +5 percentage points, volume/market-cap ≥ 10%, and weighted RSI < 75.
+        **🚀 TRUE BREAKOUT:** closed above the previous 20-day high by at least 0.5% AND above the previous 20-week high by at least 0.25%, with daily volume at least 1.5× the prior 20-day average, the breakout candle closing in its top 25%, BTC-relative 7D strength ≥ +5 percentage points, volume/market-cap ≥ 10%, weighted RSI < 75%, daily StochRSI %K ≥ 50 with %K > %D, **ADX-14 ≥ 25 and rising, and +DI > -DI**. ADX measures trend strength while +DI/-DI provide direction; a high ADX alone is not treated as bullish.
 
         **Important:** this is a ranking/filtering engine, not a prediction or buy/sell system.
         A high score means several measured conditions are aligned; it does not guarantee future performance.
