@@ -197,10 +197,13 @@ def adx_dmi(high, low, close, n=14):
 
 @st.cache_data(ttl=300)
 def daily_adx(coin_id):
-    """Daily ADX-14/DMI calculated entirely from CoinGecko OHLC data."""
+    """Daily ADX-14/DMI calculated entirely from CoinGecko data with a history buffer."""
     try:
-        d=cg_ohlc_daily(coin_id, 30)
-        if len(d)<28:
+        # ADX-14 needs at least 30 completed daily candles in adx_dmi().
+        # Request a much larger CoinGecko OHLC window so that removing the
+        # currently forming day still leaves enough observations.
+        d=cg_ohlc_daily(coin_id, 90)
+        if len(d) < 35:
             return np.nan, np.nan, np.nan, np.nan
         return adx_dmi(d["high"], d["low"], d["close"], 14)
     except Exception:
