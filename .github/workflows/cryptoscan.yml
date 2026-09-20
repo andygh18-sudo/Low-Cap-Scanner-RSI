@@ -1,0 +1,47 @@
+name: Crypto Scanner
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Four daily scans, deliberately not on the top of the hour to reduce scheduling congestion.
+    - cron: '7 6,12,18,23 * * *'
+      timezone: 'Europe/London'
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run scanner
+        run: python scan_engine.py
+
+      - name: Detect new alerts
+        run: python alert_signals.py
+
+      - name: Send Top 10 + new signals to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python alert_telegram.py
+
+      - name: Commit latest results
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/latest_scan.json data/latest_scan.csv data/alert_state.json data/new_alerts.json
+          git diff --cached --quiet || git commit -m 'Update crypto scan results'
+          git push
