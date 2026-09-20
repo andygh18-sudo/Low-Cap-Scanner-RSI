@@ -63,13 +63,13 @@ def timeframe_rsi(coin_id, exchange, tf):
 def daily_weekly_monthly_rsi(cid):
     try:
         data=cg_chart(cid,365)
-        p=[x[1] for x in data.get("prices",[])]
-        if len(p)<20:return (np.nan,np.nan,np.nan)
-        d=rsi(p)
-        s=pd.Series(p)
-        w=rsi(s.resample("7D").last().dropna()) if isinstance(s.index,pd.DatetimeIndex) else np.nan
-        # Use rolling calendar approximations from daily data.
-        m=rsi(s.iloc[::30].dropna()) if len(s)>=60 else np.nan
+        prices=data.get("prices",[])
+        if len(prices)<20:return (np.nan,np.nan,np.nan)
+        idx=pd.to_datetime([x[0] for x in prices],unit="ms",utc=True)
+        s=pd.Series([x[1] for x in prices],index=idx,dtype=float).sort_index()
+        d=rsi(s)
+        w=rsi(s.resample("W").last().dropna()) if len(s)>=70 else np.nan
+        m=rsi(s.resample("ME").last().dropna()) if len(s)>=180 else np.nan
         return d,w,m
     except Exception:
         return (np.nan,np.nan,np.nan)
@@ -85,10 +85,10 @@ st.caption("Volume surge + BTC-relative strength + 1H/4H/1D/1W/1M/3M RSI + downs
 
 with st.sidebar:
     st.header("Filters")
-    mincap=st.number_input("Min market cap ($M)",20,1000,20,10)
-    maxcap=st.number_input("Max market cap ($M)",50,2000,500,25)
-    minvol=st.number_input("Min 24h volume ($M)",0.5,500,2.0,0.5)
-    minvr=st.number_input("Min volume / market cap (%)",0.0,100.0,5.0,1.0)
+    mincap=st.number_input("Min market cap ($M)", min_value=20.0, max_value=1000.0, value=20.0, step=10.0, format="%.1f")
+    maxcap=st.number_input("Max market cap ($M)", min_value=50.0, max_value=2000.0, value=500.0, step=25.0, format="%.1f")
+    minvol=st.number_input("Min 24h volume ($M)", min_value=0.5, max_value=500.0, value=2.0, step=0.5, format="%.1f")
+    minvr=st.number_input("Min volume / market cap (%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0, format="%.1f")
     exchange=st.selectbox("Exchange candles",["bybit","okx","kraken"],index=0)
     st.caption("Exchange candle access is public; no trading/API key is required.")
     run=st.button("🚀 Run full scanner",type="primary")
@@ -146,11 +146,17 @@ if run or st.session_state.run:
                 vals[tf]=timeframe_rsi(x.id,exchange,tf.lower())
             d,w,m=daily_weekly_monthly_rsi(x.id)
             vals["1D"]=d; vals["1W"]=w; vals["1M"]=m
-            # 3M needs multi-year daily history; calculate only where enough history exists.
+            # 3M RSI from quarterly calendar resampling of CoinGecko history.
             try:
                 data=cg_chart(x.id, "max")
-                p=[z[1] for z in data.get("prices",[])]
-                vals["3M"]=rsi(pd.Series(p).iloc[::90].dropna()) if len(p)>=42 else np.nan
+                prices=data.get("prices",[])
+                if len(prices) >= 365:
+                    idx=pd.to_datetime([z[0] for z in prices],unit="ms",utc=True)
+                    s3=pd.Series([z[1] for z in prices],index=idx,dtype=float).sort_index()
+                    q=s3.resample("QE").last().dropna()
+                    vals["3M"]=rsi(q) if len(q)>=15 else np.nan
+                else:
+                    vals["3M"]=np.nan
             except Exception: vals["3M"]=np.nan
             usable=[(v,weights[k]) for k,v in vals.items() if pd.notna(v)]
             score=np.average([v for v,w in usable],weights=[w for v,w in usable]) if usable else np.nan
