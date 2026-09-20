@@ -621,7 +621,7 @@ if run or st.session_state.run:
                           bm.get("daily_breakout",False), bm.get("weekly_breakout",False),
                           bm.get("volume_confirmed",False), bm.get("close_near_high",False),
                           bm.get("daily_resistance",np.nan), bm.get("weekly_resistance",np.nan),
-                          stoch_k, stoch_d, adx_value, plus_di, minus_di, (adx_value > adx_prev if pd.notna(adx_value) and pd.notna(adx_prev) else False)])
+                          stoch_k, stoch_d, adx_value, plus_di, minus_di, (adx_value > adx_prev if pd.notna(adx_value) and pd.notna(adx_prev) else False), "CoinGecko"])
 
         finaldf=pd.DataFrame(final,columns=["Coin","Ticker","Score","Signal","Weighted RSI","BTC-rel 7d %","Vol/MCap %","24h %",
                                              "Daily breakout","Weekly breakout","Volume confirmed","Close near high",
