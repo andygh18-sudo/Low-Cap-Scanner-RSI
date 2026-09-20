@@ -1,14 +1,1 @@
-[
-  {
-    "id": "sonic-3",
-    "ticker": "S",
-    "score": 77.9,
-    "signal": "\ud83d\ude80 TRUE BREAKOUT"
-  },
-  {
-    "id": "sei-network",
-    "ticker": "SEI",
-    "score": 69.4,
-    "signal": "\ud83d\ude80 TRUE BREAKOUT"
-  }
-]
+[]
