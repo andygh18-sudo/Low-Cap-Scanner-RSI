@@ -88,23 +88,44 @@ def stoch_rsi(values, rsi_len=14, stoch_len=14, k_len=3, d_len=3):
     return float(k.iloc[-1]), float(d.iloc[-1])
 
 @st.cache_data(ttl=300)
+def daily_closed_candles(exchange_name, ticker, limit=180):
+    """Fetch closed daily USDT spot candles with automatic exchange fallback."""
+    # Bybit can be unavailable/restricted from some hosting regions, so do not
+    # let a single exchange failure turn all ADX/StochRSI values into N/A.
+    exchanges = []
+    for name in [exchange_name, "okx", "kraken"]:
+        if name not in exchanges:
+            exchanges.append(name)
+
+    errors = []
+    for name in exchanges:
+        try:
+            ex = getattr(ccxt, name)({"enableRateLimit": True, "timeout": 20000})
+            ex.load_markets()
+            symbol = find_market_symbol(ex, ticker)
+            if not symbol:
+                errors.append(f"{name}: no USDT spot market")
+                continue
+            candles = ex.fetch_ohlcv(symbol, timeframe="1d", limit=limit)
+            if len(candles) > 1:
+                candles = candles[:-1]  # remove forming candle
+            if len(candles) >= 40:
+                return candles, name, symbol, ""
+            errors.append(f"{name}: only {len(candles)} closed candles")
+        except Exception as exc:
+            errors.append(f"{name}: {type(exc).__name__}")
+
+    return [], None, None, "; ".join(errors)
+
+@st.cache_data(ttl=300)
 def daily_stochrsi(exchange_name, ticker):
-    """Daily StochRSI using exchange OHLCV, with the current forming candle removed."""
-    try:
-        ex = getattr(ccxt, exchange_name)({"enableRateLimit": True})
-        ex.load_markets()
-        symbol = find_market_symbol(ex, ticker)
-        if not symbol:
-            return np.nan, np.nan
-        candles = ex.fetch_ohlcv(symbol, timeframe="1d", limit=120)
-        if len(candles) > 1:
-            candles = candles[:-1]
-        if len(candles) < 40:
-            return np.nan, np.nan
-        closes = [c[4] for c in candles]
-        return stoch_rsi(closes)
-    except Exception:
+    """Daily StochRSI using closed daily exchange candles, with fallback exchanges."""
+    candles, _, _, _ = daily_closed_candles(exchange_name, ticker, 180)
+    if len(candles) < 40:
         return np.nan, np.nan
+    closes = [c[4] for c in candles]
+    return stoch_rsi(closes)
+
 
 def rsi(x, n=14):
     s=pd.Series(x,dtype=float).dropna()
@@ -170,22 +191,13 @@ def adx_dmi(high, low, close, n=14):
 
 @st.cache_data(ttl=300)
 def daily_adx(exchange_name, ticker):
-    """Daily ADX-14/DMI using closed exchange candles; tries only the selected exchange here."""
-    try:
-        ex = getattr(ccxt, exchange_name)({"enableRateLimit": True})
-        ex.load_markets()
-        symbol = find_market_symbol(ex, ticker)
-        if not symbol:
-            return np.nan, np.nan, np.nan, np.nan
-        candles = ex.fetch_ohlcv(symbol, timeframe="1d", limit=120)
-        if len(candles) > 1:
-            candles = candles[:-1]  # remove forming candle
-        if len(candles) < 35:
-            return np.nan, np.nan, np.nan, np.nan
-        d = pd.DataFrame(candles, columns=["ts","open","high","low","close","volume"])
-        return adx_dmi(d["high"], d["low"], d["close"], 14)
-    except Exception:
+    """Daily ADX-14/DMI using closed candles, with automatic exchange fallback."""
+    candles, _, _, _ = daily_closed_candles(exchange_name, ticker, 180)
+    if len(candles) < 35:
         return np.nan, np.nan, np.nan, np.nan
+    d = pd.DataFrame(candles, columns=["ts","open","high","low","close","volume"])
+    return adx_dmi(d["high"], d["low"], d["close"], 14)
+
 
 @st.cache_data(ttl=300)
 def true_breakout_metrics(exchange_name, ticker):
@@ -317,7 +329,7 @@ def btc_market_context(exchange_name):
         if bm.get("daily_breakout") and bm.get("weekly_breakout") and bm.get("volume_confirmed") and bm.get("close_near_high") and bullish_trend and trend_strengthening and pd.notna(wrsi) and wrsi < 75 and pd.notna(sk) and pd.notna(sd) and sk >= 50 and sk > sd:
             status = "🚀 BTC STRUCTURAL BREAKOUT"
         elif bullish_trend and trend_strengthening:
-            status = "🟢 BTC STRONGENING BULLISH TREND"
+            status = "🟢 BTC STRENGTHENING BULLISH TREND"
         elif pd.notna(av) and av >= 25 and pd.notna(mdi) and pd.notna(pdi) and mdi > pdi:
             status = "🔴 BTC STRONG BEARISH TREND"
         else:
