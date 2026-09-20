@@ -41,6 +41,10 @@ st.set_page_config(page_title="Crypto Low-Cap Pro Scanner", page_icon="₿", lay
 CG = "https://api.coingecko.com/api/v3"
 ZEN_ID = "horizen"
 DEFAULT_EXCHANGE = "bybit"
+COINGECKO_API_KEY = __import__("os").getenv("COINGECKO_API_KEY", "")
+CG_HEADERS = {"accept": "application/json"}
+if COINGECKO_API_KEY:
+    CG_HEADERS["x-cg-demo-api-key"] = COINGECKO_API_KEY
 
 @st.cache_data(ttl=300)
 def cg_markets():
@@ -54,11 +58,6 @@ def cg_chart(cid, days=365):
     r=requests.get(f"{CG}/coins/{cid}/market_chart",
                    params={"vs_currency":"usd","days":days},timeout=30)
     r.raise_for_status(); return r.json()
-
-@st.cache_data(ttl=180)
-def exchange_ohlcv(exchange_name, symbol, timeframe, limit=250):
-    ex = getattr(ccxt, exchange_name)({"enableRateLimit": True})
-    return ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
 
 def rsi_series(x, n=14):
     """Return full Wilder-style RSI series."""
@@ -88,44 +87,51 @@ def stoch_rsi(values, rsi_len=14, stoch_len=14, k_len=3, d_len=3):
     return float(k.iloc[-1]), float(d.iloc[-1])
 
 @st.cache_data(ttl=300)
-def daily_closed_candles(exchange_name, ticker, limit=180):
-    """Fetch closed daily USDT spot candles with automatic exchange fallback."""
-    # Bybit can be unavailable/restricted from some hosting regions, so do not
-    # let a single exchange failure turn all ADX/StochRSI values into N/A.
-    exchanges = []
-    for name in [exchange_name, "okx", "kraken"]:
-        if name not in exchanges:
-            exchanges.append(name)
-
-    errors = []
-    for name in exchanges:
-        try:
-            ex = getattr(ccxt, name)({"enableRateLimit": True, "timeout": 20000})
-            ex.load_markets()
-            symbol = find_market_symbol(ex, ticker)
-            if not symbol:
-                errors.append(f"{name}: no USDT spot market")
-                continue
-            candles = ex.fetch_ohlcv(symbol, timeframe="1d", limit=limit)
-            if len(candles) > 1:
-                candles = candles[:-1]  # remove forming candle
-            if len(candles) >= 40:
-                return candles, name, symbol, ""
-            errors.append(f"{name}: only {len(candles)} closed candles")
-        except Exception as exc:
-            errors.append(f"{name}: {type(exc).__name__}")
-
-    return [], None, None, "; ".join(errors)
+def cg_ohlc_daily(coin_id, days=30):
+    """CoinGecko OHLC data. Demo/free plans return 4-hour candles for 3-30 days; we resample to UTC daily candles."""
+    url=f"{CG}/coins/{coin_id}/ohlc"
+    r=requests.get(url, params={"vs_currency":"usd","days":str(days)}, headers=CG_HEADERS, timeout=30)
+    r.raise_for_status()
+    raw=r.json()
+    if not raw:
+        return pd.DataFrame()
+    d=pd.DataFrame(raw, columns=["ts","open","high","low","close"])
+    d["ts"]=pd.to_datetime(d["ts"], unit="ms", utc=True)
+    d=d.set_index("ts").sort_index()
+    daily=d.resample("1D").agg({"open":"first","high":"max","low":"min","close":"last"}).dropna()
+    # Do not use the currently forming UTC day.
+    if len(daily)>1:
+        daily=daily.iloc[:-1].copy()
+    return daily
 
 @st.cache_data(ttl=300)
-def daily_stochrsi(exchange_name, ticker):
-    """Daily StochRSI using closed daily exchange candles, with fallback exchanges."""
-    candles, _, _, _ = daily_closed_candles(exchange_name, ticker, 180)
-    if len(candles) < 40:
-        return np.nan, np.nan
-    closes = [c[4] for c in candles]
-    return stoch_rsi(closes)
+def cg_daily_closes(coin_id, days=100):
+    """CoinGecko market-chart hourly data, resampled to daily closes."""
+    url=f"{CG}/coins/{coin_id}/market_chart"
+    r=requests.get(url, params={"vs_currency":"usd","days":str(days),"interval":"hourly"}, headers=CG_HEADERS, timeout=30)
+    r.raise_for_status()
+    prices=r.json().get("prices",[])
+    if not prices:
+        return pd.Series(dtype=float)
+    d=pd.DataFrame(prices, columns=["ts","close"])
+    d["ts"]=pd.to_datetime(d["ts"], unit="ms", utc=True)
+    d=d.set_index("ts").sort_index()["close"].resample("1D").last().dropna()
+    if len(d)>1:
+        d=d.iloc[:-1]
+    return d
 
+@st.cache_data(ttl=300)
+def daily_stochrsi(coin_id):
+    try:
+        closes=cg_daily_closes(coin_id, 100)
+        if len(closes)<40:
+            return np.nan, np.nan
+        return stoch_rsi(closes)
+    except Exception:
+        return np.nan, np.nan
+
+def coin_id_for_row(row):
+    return str(row.get("id", ""))
 
 def rsi(x, n=14):
     s=pd.Series(x,dtype=float).dropna()
@@ -190,13 +196,15 @@ def adx_dmi(high, low, close, n=14):
             float(adx.iloc[-2]))
 
 @st.cache_data(ttl=300)
-def daily_adx(exchange_name, ticker):
-    """Daily ADX-14/DMI using closed candles, with automatic exchange fallback."""
-    candles, _, _, _ = daily_closed_candles(exchange_name, ticker, 180)
-    if len(candles) < 35:
+def daily_adx(coin_id):
+    """Daily ADX-14/DMI calculated entirely from CoinGecko OHLC data."""
+    try:
+        d=cg_ohlc_daily(coin_id, 30)
+        if len(d)<28:
+            return np.nan, np.nan, np.nan, np.nan
+        return adx_dmi(d["high"], d["low"], d["close"], 14)
+    except Exception:
         return np.nan, np.nan, np.nan, np.nan
-    d = pd.DataFrame(candles, columns=["ts","open","high","low","close","volume"])
-    return adx_dmi(d["high"], d["low"], d["close"], 14)
 
 
 @st.cache_data(ttl=300)
@@ -320,8 +328,8 @@ def btc_market_context(exchange_name):
         usable = [(v, {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}[k])
                   for k, v in vals.items() if pd.notna(v)]
         wrsi = float(np.average([v for v, w in usable], weights=[w for v, w in usable])) if usable else np.nan
-        sk, sd = daily_stochrsi(exchange_name, "BTC")
-        av, pdi, mdi, ap = daily_adx(exchange_name, "BTC")
+        sk, sd = daily_stochrsi("bitcoin")
+        av, pdi, mdi, ap = daily_adx("bitcoin")
         bm = true_breakout_metrics(exchange_name, "BTC")
         # BTC is the benchmark, so BTC-relative strength is intentionally not used here.
         bullish_trend = (pd.notna(av) and av >= 25 and pd.notna(pdi) and pd.notna(mdi) and pdi > mdi)
@@ -411,6 +419,7 @@ try:
             "+DI": btc_ctx["plus_di"],
             "-DI": btc_ctx["minus_di"],
             "ADX rising": btc_ctx["adx_rising"],
+            "Data Source": "CoinGecko",
         }])
         st.dataframe(btc_table.round(1), use_container_width=True, hide_index=True)
         st.caption("BTC is treated as the benchmark: BTC-relative strength and the low-cap volume/MCap threshold are not applied to BTC itself.")
@@ -486,7 +495,7 @@ if run or st.session_state.run:
         st.subheader("Daily StochRSI")
         stoch_rows = []
         for _, x in top.head(10).iterrows():
-            k, d = daily_stochrsi(exchange, str(x["symbol"]).upper())
+            k, d = daily_stochrsi(str(x["id"]))
             if pd.isna(k) or pd.isna(d):
                 stoch_signal = "N/A"
             elif k < 20 and k > d:
@@ -499,7 +508,7 @@ if run or st.session_state.run:
                 stoch_signal = "🔴 BEARISH"
             stoch_rows.append({
                 "Coin": x["name"], "Ticker": str(x["symbol"]).upper(),
-                "StochRSI %K": k, "StochRSI %D": d, "Signal": stoch_signal
+                "StochRSI %K": k, "StochRSI %D": d, "Data Source": "CoinGecko", "Signal": stoch_signal
             })
         stochdf = pd.DataFrame(stoch_rows)
         if not stochdf.empty:
@@ -512,7 +521,7 @@ if run or st.session_state.run:
         st.subheader("Daily ADX / DMI")
         adx_rows = []
         for _, x in top.head(10).iterrows():
-            av, pdi, mdi, ap = daily_adx(exchange, str(x["symbol"]).upper())
+            av, pdi, mdi, ap = daily_adx(str(x["id"]))
             if pd.isna(av):
                 adx_signal = "N/A"
             elif av >= 25 and pdi > mdi and av > ap:
@@ -528,6 +537,7 @@ if run or st.session_state.run:
             adx_rows.append({"Coin": x["name"], "Ticker": str(x["symbol"]).upper(),
                              "ADX-14": av, "+DI": pdi, "-DI": mdi,
                              "ADX rising": (bool(av > ap) if pd.notna(av) and pd.notna(ap) else False),
+                             "Data Source": "CoinGecko",
                              "Signal": adx_signal})
         adxdf = pd.DataFrame(adx_rows)
         if not adxdf.empty:
@@ -570,7 +580,7 @@ if run or st.session_state.run:
 
             # ADX/DMI: 10 points. Reward a strong, rising bullish trend;
             # do not reward high ADX by itself because ADX has no direction.
-            adx_value, plus_di, minus_di, adx_prev = daily_adx(exchange, str(x["symbol"]).upper())
+            adx_value, plus_di, minus_di, adx_prev = daily_adx(str(x["id"]))
             if pd.isna(adx_value):
                 adx_component = 0.0
             else:
@@ -586,7 +596,7 @@ if run or st.session_state.run:
             # Structural TRUE BREAKOUT: price + weekly structure + volume + candle quality
             # + BTC-relative strength + liquidity + RSI + StochRSI + ADX/DMI confirmation.
             bm = true_breakout_metrics(exchange, str(x["symbol"]).upper())
-            stoch_k, stoch_d = daily_stochrsi(exchange, str(x["symbol"]).upper())
+            stoch_k, stoch_d = daily_stochrsi(str(x["id"]))
             true_break = is_true_breakout(bm, x["btc_rel_7d"], x["vr"], rs, stoch_k, stoch_d,
                                            adx_value, plus_di, minus_di, adx_prev)
 
@@ -616,7 +626,7 @@ if run or st.session_state.run:
         finaldf=pd.DataFrame(final,columns=["Coin","Ticker","Score","Signal","Weighted RSI","BTC-rel 7d %","Vol/MCap %","24h %",
                                              "Daily breakout","Weekly breakout","Volume confirmed","Close near high",
                                              "Daily resistance","Weekly resistance","StochRSI %K","StochRSI %D",
-                                             "ADX-14","+DI","-DI","ADX rising"])
+                                             "ADX-14","+DI","-DI","ADX rising","Data Source"])
         finaldf=finaldf.sort_values("Score",ascending=False)
         st.dataframe(finaldf,use_container_width=True,hide_index=True)
 
