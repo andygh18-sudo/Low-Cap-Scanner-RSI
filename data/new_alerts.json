@@ -1,1 +1,38 @@
-[]
+[
+  {
+    "id": "zama",
+    "ticker": "ZAMA",
+    "score": 80.7,
+    "signal": "\ud83d\ude80 RELATIVE-STRENGTH BREAKOUT"
+  },
+  {
+    "id": "starknet",
+    "ticker": "STRK",
+    "score": 79.3,
+    "signal": "\ud83d\ude80 RELATIVE-STRENGTH BREAKOUT"
+  },
+  {
+    "id": "sonic-3",
+    "ticker": "S",
+    "score": 77.4,
+    "signal": "\ud83d\ude80 RELATIVE-STRENGTH BREAKOUT"
+  },
+  {
+    "id": "arweave",
+    "ticker": "AR",
+    "score": 74.4,
+    "signal": "\ud83d\ude80 RELATIVE-STRENGTH BREAKOUT"
+  },
+  {
+    "id": "optimism",
+    "ticker": "OP",
+    "score": 71.9,
+    "signal": "\ud83d\ude80 RELATIVE-STRENGTH BREAKOUT"
+  },
+  {
+    "id": "dgrid-ai",
+    "ticker": "DGAI",
+    "score": 69.2,
+    "signal": "\ud83d\ude80 RELATIVE-STRENGTH BREAKOUT"
+  }
+]
