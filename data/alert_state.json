@@ -2,7 +2,7 @@
   {
     "id": "starknet",
     "ticker": "STRK",
-    "score": 81.0,
+    "score": 80.8,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
@@ -12,9 +12,15 @@
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
+    "id": "arweave",
+    "ticker": "AR",
+    "score": 76.0,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
     "id": "optimism",
     "ticker": "OP",
-    "score": 77.9,
+    "score": 76.0,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
