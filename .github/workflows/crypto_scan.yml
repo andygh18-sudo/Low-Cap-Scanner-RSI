@@ -31,6 +31,7 @@ on:
   - cron: '7 22 * * *'
   - cron: '7 23 * * *'
  timezone: 'Europe/London'
+
 permissions:
   contents: write
 
