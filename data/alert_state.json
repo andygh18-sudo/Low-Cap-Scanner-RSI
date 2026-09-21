@@ -2,61 +2,61 @@
   {
     "id": "sei-network",
     "ticker": "SEI",
-    "score": 87.1,
+    "score": 87.3,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
   },
   {
     "id": "dogwifcoin",
     "ticker": "WIF",
-    "score": 85.2,
+    "score": 85.5,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "fartcoin",
+    "ticker": "FARTCOIN",
+    "score": 84.1,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "fetch-ai",
     "ticker": "FET",
-    "score": 84.1,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "fartcoin",
-    "ticker": "FARTCOIN",
-    "score": 83.9,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "kamino",
-    "ticker": "KMNO",
-    "score": 83.4,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "bonk",
-    "ticker": "BONK",
-    "score": 83.1,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "four",
-    "ticker": "FORM",
-    "score": 82.3,
+    "score": 84.0,
     "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   },
   {
     "id": "useless-3",
     "ticker": "USELESS",
-    "score": 82.2,
+    "score": 83.7,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
-    "id": "stonk-3",
-    "ticker": "STONK",
-    "score": 81.5,
+    "id": "four",
+    "ticker": "FORM",
+    "score": 82.4,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+  },
+  {
+    "id": "zama",
+    "ticker": "ZAMA",
+    "score": 82.3,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+  },
+  {
+    "id": "bonk",
+    "ticker": "BONK",
+    "score": 82.0,
     "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   },
   {
     "id": "thorchain",
     "ticker": "RUNE",
-    "score": 80.8,
+    "score": 81.5,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "dgrid-ai",
+    "ticker": "DGAI",
+    "score": 80.4,
     "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   }
 ]
