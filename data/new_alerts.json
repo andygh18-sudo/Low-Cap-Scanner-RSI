@@ -1,20 +1,20 @@
 [
   {
-    "id": "arweave",
-    "ticker": "AR",
-    "score": 83.9,
+    "id": "kamino",
+    "ticker": "KMNO",
+    "score": 84.3,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+  },
+  {
+    "id": "fetch-ai",
+    "ticker": "FET",
+    "score": 83.3,
+    "signal": "\ud83d\ude80 TRUE BREAKOUT"
+  },
+  {
+    "id": "mina-protocol",
+    "ticker": "MINA",
+    "score": 81.2,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "genius-3",
-    "ticker": "GENIUS",
-    "score": 81.5,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "zama",
-    "ticker": "ZAMA",
-    "score": 81.4,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   }
 ]
