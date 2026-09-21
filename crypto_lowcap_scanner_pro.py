@@ -34,6 +34,8 @@ _refresh_status()
 import pandas as pd
 import numpy as np
 import requests
+import time
+import random
 import ccxt
 from datetime import datetime, timezone
 from rsi_engine import multi_timeframe_rsi, weighted_rsi
@@ -47,27 +49,65 @@ CG_HEADERS = {"accept": "application/json"}
 if COINGECKO_API_KEY:
     CG_HEADERS["x-cg-demo-api-key"] = COINGECKO_API_KEY
 
-@st.cache_data(ttl=300)
+CG_RETRIES = 5
+CG_BACKOFF_BASE = 2.0
+
+def _cg_get(path, params=None, timeout=30):
+    """CoinGecko GET with 429-aware exponential backoff and jitter."""
+    url = f"{CG}/{path.lstrip('/')}"
+    last_exc = None
+    for attempt in range(CG_RETRIES):
+        try:
+            r = requests.get(url, params=params or {}, headers=CG_HEADERS, timeout=timeout)
+            if r.status_code != 429:
+                r.raise_for_status()
+                return r
+            retry_after = r.headers.get("Retry-After")
+            try:
+                wait = float(retry_after) if retry_after else CG_BACKOFF_BASE * (2 ** attempt)
+            except (TypeError, ValueError):
+                wait = CG_BACKOFF_BASE * (2 ** attempt)
+            wait = min(wait, 60.0) + random.uniform(0.25, 1.25)
+            time.sleep(wait)
+            last_exc = requests.HTTPError(f"429 Too Many Requests for {url}; retrying after {wait:.1f}s")
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < CG_RETRIES - 1:
+                time.sleep(min(CG_BACKOFF_BASE * (2 ** attempt), 30.0) + random.uniform(0.25, 1.25))
+    raise last_exc or requests.HTTPError(f"CoinGecko request failed: {url}")
+
+@st.cache_data(ttl=600, show_spinner=False)
 def cg_markets():
-    """CoinGecko Top 500 universe using two 250-coin pages."""
+    """CoinGecko Top 500 universe with 429 protection.
+
+    If page 2 is temporarily rate-limited, page 1 is retained so the
+    scanner can still run; ZEN is explicitly re-added downstream.
+    """
     frames=[]
+    warning=None
     for page in (1, 2):
         p={"vs_currency":"usd","order":"market_cap_desc","per_page":250,"page":page,
            "sparkline":"false","price_change_percentage":"7d,30d"}
-        r=requests.get(f"{CG}/coins/markets",params=p,headers=CG_HEADERS,timeout=30)
-        r.raise_for_status()
-        data=r.json()
-        if data:
-            frames.append(pd.DataFrame(data))
+        try:
+            data=_cg_get("coins/markets", params=p, timeout=30).json()
+            if data:
+                frames.append(pd.DataFrame(data))
+        except Exception as exc:
+            warning=f"CoinGecko page {page} unavailable after retries: {exc}"
+            if page == 1 and not frames:
+                raise
+            break
     if not frames:
         return pd.DataFrame()
-    return pd.concat(frames,ignore_index=True).drop_duplicates("id")
+    out=pd.concat(frames,ignore_index=True).drop_duplicates("id")
+    if warning:
+        out.attrs["coingecko_warning"] = warning
+    return out
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=600, show_spinner=False)
 def cg_chart(cid, days=365):
-    r=requests.get(f"{CG}/coins/{cid}/market_chart",
-                   params={"vs_currency":"usd","days":days},headers=CG_HEADERS,timeout=30)
-    r.raise_for_status(); return r.json()
+    return _cg_get(f"coins/{cid}/market_chart",
+                   params={"vs_currency":"usd","days":days},timeout=30).json()
 
 
 def cg_daily_ohlc_from_market_chart(coin_id, days=90):
@@ -644,6 +684,8 @@ if run or st.session_state.run:
     try:
         with st.spinner("Scanning CoinGecko Top 500…"):
             df=cg_markets()
+            if getattr(df, "attrs", {}).get("coingecko_warning"):
+                st.warning(df.attrs["coingecko_warning"] + " — continuing with the available market universe.")
         df["mcap_m"]=df.market_cap/1e6
         df["vol_m"]=df.total_volume/1e6
         df["vr"]=df.total_volume/df.market_cap*100
