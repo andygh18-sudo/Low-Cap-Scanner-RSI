@@ -1,20 +1,8 @@
 [
   {
-    "id": "fetch-ai",
-    "ticker": "FET",
-    "score": 83.5,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "zama",
-    "ticker": "ZAMA",
-    "score": 81.9,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "thorchain",
-    "ticker": "RUNE",
-    "score": 80.5,
+    "id": "dgrid-ai",
+    "ticker": "DGAI",
+    "score": 80.7,
     "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   }
 ]

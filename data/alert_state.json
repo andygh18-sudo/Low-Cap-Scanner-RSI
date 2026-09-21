@@ -2,50 +2,50 @@
   {
     "id": "dogwifcoin",
     "ticker": "WIF",
-    "score": 86.6,
+    "score": 86.9,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
   },
   {
     "id": "sonic-3",
     "ticker": "S",
-    "score": 86.6,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "mina-protocol",
-    "ticker": "MINA",
-    "score": 84.1,
+    "score": 85.3,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "fartcoin",
     "ticker": "FARTCOIN",
-    "score": 83.7,
+    "score": 83.8,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "fetch-ai",
     "ticker": "FET",
-    "score": 83.5,
+    "score": 83.2,
     "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   },
   {
     "id": "kamino",
     "ticker": "KMNO",
-    "score": 82.9,
+    "score": 83.0,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "bonk",
     "ticker": "BONK",
-    "score": 82.3,
+    "score": 82.6,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
   },
   {
     "id": "zama",
     "ticker": "ZAMA",
-    "score": 81.9,
+    "score": 82.0,
     "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+  },
+  {
+    "id": "mina-protocol",
+    "ticker": "MINA",
+    "score": 81.8,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "plasma",
@@ -54,9 +54,9 @@
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
-    "id": "thorchain",
-    "ticker": "RUNE",
-    "score": 80.5,
+    "id": "dgrid-ai",
+    "ticker": "DGAI",
+    "score": 80.7,
     "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   }
 ]
