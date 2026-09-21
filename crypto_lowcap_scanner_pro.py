@@ -918,32 +918,16 @@ try:
 except Exception:
     pass
 
-with st.sidebar:
-    st.header("Filters")
-    mincap=st.number_input("Min market cap ($M)", min_value=20.0, max_value=1000.0, value=20.0, step=10.0, format="%.1f")
-    maxcap=st.number_input("Max market cap ($M)", min_value=50.0, max_value=2000.0, value=500.0, step=25.0, format="%.1f")
-    minvol=st.number_input("Min 24h volume ($M)", min_value=0.5, max_value=500.0, value=2.0, step=0.5, format="%.1f")
-    minvr=st.number_input("Min volume / market cap (%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0, format="%.1f")
-    exchange=st.selectbox("Exchange candles",["bybit","okx","kraken"],index=0)
-    st.caption("Exchange candle access is public; no trading/API key is required.")
-    run=st.button("🚀 Run full scanner",type="primary")
-
-    st.divider()
-    st.caption("BTC is always analysed separately as the benchmark and is not subject to the low-cap market-cap filter.")
-
-
-
-
 # ------------------------------ V8 DASHBOARD ------------------------------
 with st.sidebar:
     st.header("Filters")
-    mincap=st.number_input("Min market cap ($M)", min_value=20.0, max_value=1000.0, value=20.0, step=10.0, format="%.1f")
-    maxcap=st.number_input("Max market cap ($M)", min_value=50.0, max_value=2000.0, value=500.0, step=25.0, format="%.1f")
-    minvol=st.number_input("Min 24h volume ($M)", min_value=0.5, max_value=500.0, value=2.0, step=0.5, format="%.1f")
-    minvr=st.number_input("Min volume / market cap (%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0, format="%.1f")
-    preselect=st.slider("Technical pre-screen size", min_value=50, max_value=100, value=60, step=10)
-    exchange=st.selectbox("Exchange candles",["bybit","okx","kraken"],index=0)
-    run=st.button("🚀 Run full scanner",type="primary")
+    mincap=st.number_input("Min market cap ($M)", min_value=20.0, max_value=1000.0, value=20.0, step=10.0, format="%.1f", key="v8_mincap")
+    maxcap=st.number_input("Max market cap ($M)", min_value=50.0, max_value=2000.0, value=500.0, step=25.0, format="%.1f", key="v8_maxcap")
+    minvol=st.number_input("Min 24h volume ($M)", min_value=0.5, max_value=500.0, value=2.0, step=0.5, format="%.1f", key="v8_minvol")
+    minvr=st.number_input("Min volume / market cap (%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0, format="%.1f", key="v8_minvr")
+    preselect=st.slider("Technical pre-screen size", min_value=50, max_value=100, value=60, step=10, key="v8_preselect")
+    exchange=st.selectbox("Exchange candles",["bybit","okx","kraken"],index=0, key="v8_exchange")
+    run=st.button("🚀 Run full scanner",type="primary", key="v8_run")
     st.caption("v8 analyses a broad pre-screen before applying the expensive structural breakout engine. ZEN is always retained.")
 
 st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8")
