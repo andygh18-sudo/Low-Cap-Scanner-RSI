@@ -2,13 +2,13 @@
   {
     "id": "sonic-3",
     "ticker": "S",
-    "score": 87.2,
+    "score": 87.5,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
-    "id": "dogwifcoin",
-    "ticker": "WIF",
-    "score": 86.8,
+    "id": "sei-network",
+    "ticker": "SEI",
+    "score": 86.5,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
   },
   {
@@ -18,45 +18,45 @@
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
+    "id": "dogwifcoin",
+    "ticker": "WIF",
+    "score": 85.9,
+    "signal": "\ud83d\ude80 TRUE BREAKOUT"
+  },
+  {
     "id": "fartcoin",
     "ticker": "FARTCOIN",
-    "score": 85.2,
+    "score": 84.8,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "bonk",
     "ticker": "BONK",
-    "score": 84.7,
+    "score": 84.2,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
   },
   {
     "id": "kamino",
     "ticker": "KMNO",
-    "score": 84.4,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "optimism",
-    "ticker": "OP",
-    "score": 82.3,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "dgrid-ai",
-    "ticker": "DGAI",
-    "score": 82.1,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "plasma",
-    "ticker": "XPL",
-    "score": 82.0,
+    "score": 83.0,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "mina-protocol",
     "ticker": "MINA",
-    "score": 82.0,
+    "score": 82.3,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "plasma",
+    "ticker": "XPL",
+    "score": 81.9,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "dgrid-ai",
+    "ticker": "DGAI",
+    "score": 81.7,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   }
 ]

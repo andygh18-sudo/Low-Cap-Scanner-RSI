@@ -1,38 +1,8 @@
 [
   {
-    "id": "dogwifcoin",
-    "ticker": "WIF",
-    "score": 86.8,
+    "id": "sei-network",
+    "ticker": "SEI",
+    "score": 86.5,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
-  },
-  {
-    "id": "fetch-ai",
-    "ticker": "FET",
-    "score": 86.4,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "bonk",
-    "ticker": "BONK",
-    "score": 84.7,
-    "signal": "\ud83d\ude80 TRUE BREAKOUT"
-  },
-  {
-    "id": "optimism",
-    "ticker": "OP",
-    "score": 82.3,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "dgrid-ai",
-    "ticker": "DGAI",
-    "score": 82.1,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "mina-protocol",
-    "ticker": "MINA",
-    "score": 82.0,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
