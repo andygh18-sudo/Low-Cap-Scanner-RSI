@@ -89,20 +89,76 @@ def stoch_rsi(values, rsi_len=14, stoch_len=14, k_len=3, d_len=3):
         return np.nan, np.nan
     return float(k.iloc[-1]), float(d.iloc[-1])
 
+def _daily_closes_from_prices(prices):
+    """Convert CoinGecko timestamp/price pairs to completed UTC daily closes."""
+    if not prices:
+        return pd.Series(dtype=float)
+    q = pd.DataFrame(prices, columns=["ts", "price"])
+    q["ts"] = pd.to_datetime(q["ts"], unit="ms", utc=True)
+    q["price"] = pd.to_numeric(q["price"], errors="coerce")
+    q = q.dropna(subset=["ts", "price"]).set_index("ts").sort_index()
+    daily = q["price"].resample("1D").last().dropna()
+    # Never use the currently forming UTC day.
+    if len(daily) > 1:
+        daily = daily.iloc[:-1]
+    return daily
+
+
+def _exchange_daily_closes(ticker, exchange_names=("bybit", "okx", "kraken")):
+    """Fallback daily closes when CoinGecko data is unavailable/rate-limited."""
+    for name in exchange_names:
+        try:
+            ex = getattr(ccxt, name)({"enableRateLimit": True})
+            ex.load_markets()
+            symbol = find_market_symbol(ex, ticker)
+            if not symbol:
+                continue
+            candles = ex.fetch_ohlcv(symbol, timeframe="1d", limit=120)
+            if not candles or len(candles) < 40:
+                continue
+            q = pd.DataFrame(candles, columns=["ts","open","high","low","close","volume"])
+            q["ts"] = pd.to_datetime(q["ts"], unit="ms", utc=True)
+            q = q.sort_values("ts")
+            # Exchange OHLCV normally includes the current candle; exclude it.
+            if len(q) > 1:
+                q = q.iloc[:-1]
+            return q["close"].astype(float).dropna(), name
+        except Exception:
+            continue
+    return pd.Series(dtype=float), None
+
+
 @st.cache_data(ttl=300)
-def daily_stochrsi(coin_id):
-    """Daily StochRSI calculated from completed CoinGecko-derived daily closes."""
-    try:
-        # Use the longest hourly-capable window so short-history coins have
-        # more completed daily candles available for the StochRSI warm-up.
-        d = cg_daily_ohlc_from_market_chart(coin_id, 100)
-        # RSI-14 + StochRSI-14 + K3 + D3 needs about 32 completed closes.
-        if d.empty or len(d) < 33:
-            return np.nan, np.nan
-        k, dval = stoch_rsi(d["close"])
-        return k, dval
-    except Exception:
-        return np.nan, np.nan
+def daily_stochrsi(coin_id, ticker=None):
+    """Daily StochRSI with CoinGecko first and exchange fallback.
+
+    Returns valid %K/%D whenever enough completed daily candles exist.
+    The previous version silently converted API errors and data-source
+    failures into N/A; this version falls back to Bybit/OKX/Kraken.
+    """
+    # 1) CoinGecko: use 90 days first because this normally provides dense
+    # hourly data, then 365 days as a second historical fallback.
+    for days in (90, 365):
+        try:
+            payload = cg_chart(coin_id, days)
+            closes = _daily_closes_from_prices(payload.get("prices", []))
+            if len(closes) >= 40:
+                k, dval = stoch_rsi(closes)
+                if pd.notna(k) and pd.notna(dval):
+                    return k, dval
+        except Exception:
+            pass
+
+    # 2) Exchange fallback. This is particularly important for smaller coins
+    # when CoinGecko temporarily returns 429/5xx or sparse history.
+    if ticker:
+        closes, _source = _exchange_daily_closes(ticker)
+        if len(closes) >= 40:
+            k, dval = stoch_rsi(closes)
+            if pd.notna(k) and pd.notna(dval):
+                return k, dval
+
+    return np.nan, np.nan
 
 @st.cache_data(ttl=300)
 def cg_daily_ohlc_from_market_chart(coin_id, days=90):
@@ -336,7 +392,7 @@ def btc_market_context(exchange_name):
         usable = [(v, {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}[k])
                   for k, v in vals.items() if pd.notna(v)]
         wrsi = float(np.average([v for v, w in usable], weights=[w for v, w in usable])) if usable else np.nan
-        sk, sd = daily_stochrsi("bitcoin")
+        sk, sd = daily_stochrsi("bitcoin", "BTC")
         av, pdi, mdi, ap = daily_adx("bitcoin")
         bm = true_breakout_metrics(exchange_name, "BTC")
         # BTC is the benchmark, so BTC-relative strength is intentionally not used here.
@@ -503,7 +559,7 @@ if run or st.session_state.run:
         st.subheader("Daily StochRSI")
         stoch_rows = []
         for _, x in top.head(10).iterrows():
-            k, d = daily_stochrsi(str(x["id"]))
+            k, d = daily_stochrsi(str(x["id"]), str(x["symbol"]).upper())
             if pd.isna(k) or pd.isna(d):
                 stoch_signal = "N/A"
             elif k < 20 and k > d:
@@ -524,7 +580,7 @@ if run or st.session_state.run:
             for col in ["StochRSI %K", "StochRSI %D"]:
                 stoch_display[col] = stoch_display[col].apply(lambda v: "N/A" if pd.isna(v) else round(float(v), 1))
             st.dataframe(stoch_display, use_container_width=True, hide_index=True)
-        st.caption("StochRSI uses RSI-14, StochRSI-14, %K 3, %D 3. <20 is oversold; >80 is overbought.")
+        st.caption("Daily StochRSI uses RSI-14, StochRSI-14, %K 3, %D 3 on completed daily candles. CoinGecko is used first, with Bybit → OKX → Kraken fallback when CoinGecko history is unavailable or rate-limited. <20 is oversold; >80 is overbought.")
 
         st.subheader("Daily ADX / DMI")
         adx_rows = []
@@ -602,7 +658,7 @@ if run or st.session_state.run:
             score = min(100,max(0,raw*regime_adj))
 
             # TRUE BREAKOUT PRO confirmation and extension control.
-            bm=true_breakout_metrics(exchange,str(x["symbol"]).upper()); stoch_k,stoch_d=daily_stochrsi(str(x["id"]))
+            bm=true_breakout_metrics(exchange,str(x["symbol"]).upper()); stoch_k,stoch_d=daily_stochrsi(str(x["id"]), str(x["symbol"]).upper())
             confidence=breakout_confidence(bm,x["btc_rel_7d"],x["vr"],rs,stoch_k,stoch_d,adx_value,plus_di,minus_di,adx_prev)
             true_break=is_true_breakout(bm,x["btc_rel_7d"],x["vr"],rs,stoch_k,stoch_d,adx_value,plus_di,minus_di,adx_prev)
             extended=bool((pd.notna(rs) and rs>=80) or (pd.notna(bm.get("breakout_distance_pct")) and bm["breakout_distance_pct"]>2))
