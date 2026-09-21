@@ -1,20 +1,20 @@
 [
   {
-    "id": "dogwifcoin",
-    "ticker": "WIF",
-    "score": 87.2,
+    "id": "fartcoin",
+    "ticker": "FARTCOIN",
+    "score": 85.2,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
-    "id": "kamino",
-    "ticker": "KMNO",
-    "score": 84.0,
+    "id": "bonk",
+    "ticker": "BONK",
+    "score": 84.4,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
-    "id": "dgrid-ai",
-    "ticker": "DGAI",
-    "score": 82.7,
+    "id": "zencash",
+    "ticker": "ZEN",
+    "score": 84.2,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
