@@ -2,25 +2,37 @@
   {
     "id": "starknet",
     "ticker": "STRK",
-    "score": 80.5,
+    "score": 80.6,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "sonic-3",
     "ticker": "S",
-    "score": 78.9,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "optimism",
-    "ticker": "OP",
-    "score": 76.7,
+    "score": 79.0,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "sei-network",
     "ticker": "SEI",
-    "score": 76.4,
+    "score": 77.4,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
+  },
+  {
+    "id": "optimism",
+    "ticker": "OP",
+    "score": 77.0,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "zama",
+    "ticker": "ZAMA",
+    "score": 75.2,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+  },
+  {
+    "id": "arweave",
+    "ticker": "AR",
+    "score": 75.0,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]

@@ -1,8 +1,14 @@
 [
   {
-    "id": "sonic-3",
-    "ticker": "S",
-    "score": 78.9,
+    "id": "zama",
+    "ticker": "ZAMA",
+    "score": 75.2,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+  },
+  {
+    "id": "arweave",
+    "ticker": "AR",
+    "score": 75.0,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
