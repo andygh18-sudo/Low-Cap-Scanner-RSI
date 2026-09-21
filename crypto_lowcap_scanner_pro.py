@@ -129,15 +129,8 @@ def _exchange_daily_closes(ticker, exchange_names=("bybit", "okx", "kraken")):
 
 
 @st.cache_data(ttl=300)
-def daily_stochrsi(coin_id, ticker=None):
-    """Daily StochRSI with CoinGecko first and exchange fallback.
-
-    Returns valid %K/%D whenever enough completed daily candles exist.
-    The previous version silently converted API errors and data-source
-    failures into N/A; this version falls back to Bybit/OKX/Kraken.
-    """
-    # 1) CoinGecko: use 90 days first because this normally provides dense
-    # hourly data, then 365 days as a second historical fallback.
+def daily_stochrsi_with_source(coin_id, ticker=None):
+    """Daily StochRSI returning %K, %D and the actual data source used."""
     for days in (90, 365):
         try:
             payload = cg_chart(coin_id, days)
@@ -145,68 +138,22 @@ def daily_stochrsi(coin_id, ticker=None):
             if len(closes) >= 40:
                 k, dval = stoch_rsi(closes)
                 if pd.notna(k) and pd.notna(dval):
-                    return k, dval
+                    return k, dval, "CoinGecko"
         except Exception:
             pass
-
-    # 2) Exchange fallback. This is particularly important for smaller coins
-    # when CoinGecko temporarily returns 429/5xx or sparse history.
     if ticker:
-        closes, _source = _exchange_daily_closes(ticker)
+        closes, source = _exchange_daily_closes(ticker)
         if len(closes) >= 40:
             k, dval = stoch_rsi(closes)
             if pd.notna(k) and pd.notna(dval):
-                return k, dval
+                return k, dval, str(source).upper()
+    return np.nan, np.nan, "Unavailable"
 
-    return np.nan, np.nan
 
-@st.cache_data(ttl=300)
-def cg_daily_ohlc_from_market_chart(coin_id, days=90):
-    """Build completed daily OHLC candles from CoinGecko market-chart prices.
-
-    CoinGecko Demo OHLC becomes 4-day candles for ranges above 30 days,
-    which is insufficient for a reliable ADX-14 after daily resampling.
-    Market-chart data is hourly for 2-90 day ranges, so we aggregate the
-    hourly prices into daily open/high/low/close candles.
-    """
-    url=f"{CG}/coins/{coin_id}/market_chart"
-    r=requests.get(url, params={"vs_currency":"usd","days":str(days)},
-                   headers=CG_HEADERS, timeout=30)
-    r.raise_for_status()
-    prices=r.json().get("prices",[])
-    if not prices:
-        return pd.DataFrame()
-    d=pd.DataFrame(prices, columns=["ts","price"])
-    d["ts"]=pd.to_datetime(d["ts"], unit="ms", utc=True)
-    d=d.set_index("ts").sort_index()
-    daily=d["price"].resample("1D").agg(["first","max","min","last"]).dropna()
-    daily.columns=["open","high","low","close"]
-    # Do not use the currently forming UTC day.
-    if len(daily)>1:
-        daily=daily.iloc[:-1].copy()
-    return daily
-
-@st.cache_data(ttl=300)
-def cg_ohlc_daily(coin_id, days=30):
-    """Return completed daily OHLC using CoinGecko market-chart prices.
-
-    This avoids the Demo OHLC endpoint's coarse 4-day candles for >30 days.
-    """
-    return cg_daily_ohlc_from_market_chart(coin_id, max(int(days), 60))
-
-def coin_id_for_row(row):
-    return str(row.get("id", ""))
-
-def rsi(x, n=14):
-    s=pd.Series(x,dtype=float).dropna()
-    if len(s)<n+1:return np.nan
-    d=s.diff(); g=d.clip(lower=0); l=-d.clip(upper=0)
-    ag=g.ewm(alpha=1/n,adjust=False,min_periods=n).mean()
-    al=l.ewm(alpha=1/n,adjust=False,min_periods=n).mean()
-    rs=ag/al.replace(0,np.nan)
-    z=100-(100/(1+rs))
-    z=z.where(~((al==0)&(ag>0)),100.0)
-    return float(z.iloc[-1]) if pd.notna(z.iloc[-1]) else np.nan
+def daily_stochrsi(coin_id, ticker=None):
+    """Compatibility wrapper returning only %K and %D."""
+    k, dval, _source = daily_stochrsi_with_source(coin_id, ticker)
+    return k, dval
 
 
 def find_market_symbol(ex, ticker):
@@ -226,38 +173,61 @@ def find_market_symbol(ex, ticker):
 
 
 def adx_dmi(high, low, close, n=14):
-    """Return Wilder-style ADX, +DI and -DI plus prior ADX for slope."""
-    h = pd.Series(high, dtype=float).reset_index(drop=True)
-    l = pd.Series(low, dtype=float).reset_index(drop=True)
-    c = pd.Series(close, dtype=float).reset_index(drop=True)
-    if len(c) < (2 * n + 2):
-        return np.nan, np.nan, np.nan, np.nan
+    """Robust Wilder ADX/DMI with explicit initialization.
 
-    up_move = h.diff()
-    down_move = -l.diff()
-    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0))
-    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0))
-    tr = pd.concat([
-        h - l,
-        (h - c.shift(1)).abs(),
-        (l - c.shift(1)).abs()
-    ], axis=1).max(axis=1)
+    Requires 2*n+1 completed candles for the first ADX and returns the
+    latest ADX, +DI, -DI and prior ADX. Extra history is preferred because
+    ADX is recursive and benefits from a warm-up period.
+    """
+    h=pd.to_numeric(pd.Series(high),errors="coerce").reset_index(drop=True)
+    l=pd.to_numeric(pd.Series(low),errors="coerce").reset_index(drop=True)
+    c=pd.to_numeric(pd.Series(close),errors="coerce").reset_index(drop=True)
+    z=pd.concat([h,l,c],axis=1).dropna().reset_index(drop=True)
+    if len(z)<(2*n+2):
+        return np.nan,np.nan,np.nan,np.nan
+    h,l,c=z.iloc[:,0],z.iloc[:,1],z.iloc[:,2]
+    up=h.diff(); down=-l.diff()
+    plus_dm=pd.Series(np.where((up>down)&(up>0),up,0.0),index=z.index)
+    minus_dm=pd.Series(np.where((down>up)&(down>0),down,0.0),index=z.index)
+    tr=pd.concat([(h-l),(h-c.shift(1)).abs(),(l-c.shift(1)).abs()],axis=1).max(axis=1)
 
-    # Wilder smoothing via recursive RMA (equivalent to alpha=1/n EMA after initialization).
-    atr = tr.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
-    p_dm = plus_dm.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
-    m_dm = minus_dm.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
+    # Wilder RMA initialized from the first n observations rather than
+    # pandas EMA warm-up. This prevents false NaN values in sparse histories.
+    def wilder(x, period):
+        x=pd.Series(x,dtype=float).reset_index(drop=True)
+        out=pd.Series(np.nan,index=x.index,dtype=float)
+        if len(x)<period:return out
+        out.iloc[period-1]=x.iloc[:period].sum()
+        for i in range(period,len(x)):
+            out.iloc[i]=out.iloc[i-1]-(out.iloc[i-1]/period)+x.iloc[i]
+        return out
 
-    plus_di = 100 * p_dm / atr.replace(0, np.nan)
-    minus_di = 100 * m_dm / atr.replace(0, np.nan)
-    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
-    adx = dx.ewm(alpha=1/n, adjust=False, min_periods=n).mean()
+    tr_r=wilder(tr,n)
+    pdm_r=wilder(plus_dm,n)
+    mdm_r=wilder(minus_dm,n)
+    plus_di=100*pdm_r/tr_r.replace(0,np.nan)
+    minus_di=100*mdm_r/tr_r.replace(0,np.nan)
+    di_sum=plus_di+minus_di
+    dx=100*(plus_di-minus_di).abs()/di_sum.replace(0,np.nan)
 
-    valid = adx.dropna()
-    if len(valid) < 2:
-        return np.nan, np.nan, np.nan, np.nan
-    return (float(adx.iloc[-1]), float(plus_di.iloc[-1]), float(minus_di.iloc[-1]),
-            float(adx.iloc[-2]))
+    # First ADX is the arithmetic mean of the first n valid DX values,
+    # followed by Wilder recursive smoothing.
+    adx=pd.Series(np.nan,index=dx.index,dtype=float)
+    valid_dx=dx.dropna()
+    if len(valid_dx)<n+1:
+        return np.nan,np.nan,np.nan,np.nan
+    first_pos=valid_dx.index[n-1]
+    adx.iloc[first_pos]=valid_dx.iloc[:n].mean()
+    for i in range(first_pos+1,len(dx)):
+        if pd.notna(dx.iloc[i]) and pd.notna(adx.iloc[i-1]):
+            adx.iloc[i]=(adx.iloc[i-1]*(n-1)+dx.iloc[i])/n
+
+    valid=adx.dropna()
+    if len(valid)<2:return np.nan,np.nan,np.nan,np.nan
+    last=valid.index[-1]; prev=valid.index[-2]
+    vals=(adx.loc[last],plus_di.loc[last],minus_di.loc[last],adx.loc[prev])
+    if not all(pd.notna(v) for v in vals):return np.nan,np.nan,np.nan,np.nan
+    return tuple(float(v) for v in vals)
 
 @st.cache_data(ttl=300)
 def _valid_daily_ohlc_for_adx(d):
@@ -267,39 +237,50 @@ def _valid_daily_ohlc_for_adx(d):
     if len(z)<35: return False
     return bool((z["high"]>=z["low"]).all() and (z>0).all().all())
 
-
-def _exchange_daily_ohlc(exchange_name,ticker,limit=120):
+def _exchange_daily_ohlc(exchange_name,ticker,limit=250):
     """Fetch completed daily OHLCV from an exchange as an ADX fallback."""
     try:
         ex=getattr(ccxt,exchange_name)({"enableRateLimit":True}); ex.load_markets()
         symbol=find_market_symbol(ex,ticker)
-        if not symbol: return pd.DataFrame()
+        if not symbol:return pd.DataFrame()
         rows=ex.fetch_ohlcv(symbol,timeframe="1d",limit=limit)
-        if not rows: return pd.DataFrame()
+        if not rows:return pd.DataFrame()
         d=pd.DataFrame(rows,columns=["ts","open","high","low","close","volume"])
-        return (d.iloc[:-1].copy() if len(d)>1 else d).reset_index(drop=True)
+        d=d.iloc[:-1].copy() if len(d)>1 else d
+        return d.reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
 
-
 @st.cache_data(ttl=300)
-def daily_adx(coin_id):
-    """Robust Daily ADX-14/DMI using CoinGecko then exchange fallbacks."""
+def daily_adx_with_source(coin_id, ticker=None):
+    """Robust Daily ADX-14/DMI returning values plus actual source used."""
+    candidates=[]
     try:
         d=cg_daily_ohlc_from_market_chart(coin_id,90)
-        if _valid_daily_ohlc_for_adx(d):
-            av,pdi,mdi,ap=adx_dmi(d["high"],d["low"],d["close"],14)
-            if all(pd.notna(v) for v in (av,pdi,mdi,ap)): return av,pdi,mdi,ap
-    except Exception: pass
-    ticker="BTC" if str(coin_id).lower()=="bitcoin" else str(coin_id).upper()
-    for ex_name in ("bybit","okx","kraken"):
-        d=_exchange_daily_ohlc(ex_name,ticker,120)
-        if _valid_daily_ohlc_for_adx(d):
-            try:
-                av,pdi,mdi,ap=adx_dmi(d["high"],d["low"],d["close"],14)
-                if all(pd.notna(v) for v in (av,pdi,mdi,ap)): return av,pdi,mdi,ap
-            except Exception: pass
-    return np.nan,np.nan,np.nan,np.nan
+        if _valid_daily_ohlc_for_adx(d): candidates.append(("CoinGecko",d))
+    except Exception:
+        pass
+
+    t=str(ticker or ("BTC" if str(coin_id).lower()=="bitcoin" else "")).upper().strip()
+    if t:
+        for ex_name in ("bybit","okx","kraken"):
+            d=_exchange_daily_ohlc(ex_name,t,250)
+            if _valid_daily_ohlc_for_adx(d): candidates.append((ex_name.upper(),d))
+
+    for source,d in candidates:
+        try:
+            vals=adx_dmi(d["high"],d["low"],d["close"],14)
+            if all(pd.notna(v) for v in vals):
+                return (*vals, source)
+        except Exception:
+            continue
+    return np.nan,np.nan,np.nan,np.nan,"Unavailable"
+
+
+def daily_adx(coin_id,ticker=None):
+    """Compatibility wrapper returning ADX/DMI values without source."""
+    av,pdi,mdi,ap,_source=daily_adx_with_source(coin_id,ticker)
+    return av,pdi,mdi,ap
 
 
 def true_breakout_metrics(exchange_name,ticker):
@@ -358,8 +339,8 @@ def btc_market_context(exchange_name):
         usable = [(v, {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}[k])
                   for k, v in vals.items() if pd.notna(v)]
         wrsi = float(np.average([v for v, w in usable], weights=[w for v, w in usable])) if usable else np.nan
-        sk, sd = daily_stochrsi("bitcoin", "BTC")
-        av, pdi, mdi, ap = daily_adx("bitcoin")
+        sk, sd, stoch_source = daily_stochrsi_with_source("bitcoin", "BTC")
+        av, pdi, mdi, ap, adx_source = daily_adx_with_source("bitcoin", "BTC")
         bm = true_breakout_metrics(exchange_name, "BTC")
         # BTC is the benchmark, so BTC-relative strength is intentionally not used here.
         bullish_trend = (pd.notna(av) and av >= 25 and pd.notna(pdi) and pd.notna(mdi) and pdi > mdi)
@@ -385,6 +366,8 @@ def btc_market_context(exchange_name):
             "plus_di": pdi,
             "minus_di": mdi,
             "adx_rising": bool(pd.notna(av) and pd.notna(ap) and av > ap),
+            "adx_source": adx_source,
+            "stoch_source": stoch_source,
             "daily_breakout": bool(bm.get("daily_breakout")),
             "weekly_breakout": bool(bm.get("weekly_breakout")),
             "volume_confirmed": bool(bm.get("volume_confirmed")),
@@ -449,7 +432,7 @@ try:
             "+DI": btc_ctx["plus_di"],
             "-DI": btc_ctx["minus_di"],
             "ADX rising": btc_ctx["adx_rising"],
-            "Data Source": "CoinGecko",
+            "Data Source": f"StochRSI: {btc_ctx.get('stoch_source','Unavailable')} | ADX/DMI: {btc_ctx.get('adx_source','Unavailable')}",
         }])
         st.dataframe(btc_table.round(1), use_container_width=True, hide_index=True)
         st.caption("BTC is treated as the benchmark: BTC-relative strength and the low-cap volume/MCap threshold are not applied to BTC itself.")
@@ -525,7 +508,7 @@ if run or st.session_state.run:
         st.subheader("Daily StochRSI")
         stoch_rows = []
         for _, x in top.head(10).iterrows():
-            k, d = daily_stochrsi(str(x["id"]), str(x["symbol"]).upper())
+            k, d, stoch_source = daily_stochrsi_with_source(str(x["id"]), str(x["symbol"]).upper())
             if pd.isna(k) or pd.isna(d):
                 stoch_signal = "N/A"
             elif k < 20 and k > d:
@@ -538,7 +521,7 @@ if run or st.session_state.run:
                 stoch_signal = "🔴 BEARISH"
             stoch_rows.append({
                 "Coin": x["name"], "Ticker": str(x["symbol"]).upper(),
-                "StochRSI %K": k, "StochRSI %D": d, "Data Source": "CoinGecko", "Signal": stoch_signal
+                "StochRSI %K": k, "StochRSI %D": d, "Data Source": stoch_source, "Signal": stoch_signal
             })
         stochdf = pd.DataFrame(stoch_rows)
         if not stochdf.empty:
@@ -551,7 +534,7 @@ if run or st.session_state.run:
         st.subheader("Daily ADX / DMI")
         adx_rows = []
         for _, x in top.head(10).iterrows():
-            av, pdi, mdi, ap = daily_adx(str(x["id"]))
+            av, pdi, mdi, ap, adx_source = daily_adx_with_source(str(x["id"]), str(x["symbol"]).upper())
             if pd.isna(av):
                 adx_signal = "N/A"
             elif av >= 25 and pdi > mdi and av > ap:
@@ -567,7 +550,7 @@ if run or st.session_state.run:
             adx_rows.append({"Coin": x["name"], "Ticker": str(x["symbol"]).upper(),
                              "ADX-14": av, "+DI": pdi, "-DI": mdi,
                              "ADX rising": (bool(av > ap) if pd.notna(av) and pd.notna(ap) else False),
-                             "Data Source": "CoinGecko",
+                             "Data Source": adx_source,
                              "Signal": adx_signal})
         adxdf = pd.DataFrame(adx_rows)
         if not adxdf.empty:
@@ -610,7 +593,7 @@ if run or st.session_state.run:
 
             # ADX/DMI: 10 points. Reward a strong, rising bullish trend;
             # do not reward high ADX by itself because ADX has no direction.
-            adx_value, plus_di, minus_di, adx_prev = daily_adx(str(x["id"]))
+            adx_value, plus_di, minus_di, adx_prev = daily_adx(str(x["id"]), str(x["symbol"]).upper())
             if pd.isna(adx_value):
                 adx_component = 0.0
             else:
@@ -624,7 +607,7 @@ if run or st.session_state.run:
             score = min(100,max(0,raw*regime_adj))
 
             # TRUE BREAKOUT PRO confirmation and extension control.
-            bm=true_breakout_metrics(exchange,str(x["symbol"]).upper()); stoch_k,stoch_d=daily_stochrsi(str(x["id"]), str(x["symbol"]).upper())
+            bm=true_breakout_metrics(exchange,str(x["symbol"]).upper()); stoch_k,stoch_d,stoch_source=daily_stochrsi_with_source(str(x["id"]), str(x["symbol"]).upper())
             confidence=breakout_confidence(bm,x["btc_rel_7d"],x["vr"],rs,stoch_k,stoch_d,adx_value,plus_di,minus_di,adx_prev)
             true_break=is_true_breakout(bm,x["btc_rel_7d"],x["vr"],rs,stoch_k,stoch_d,adx_value,plus_di,minus_di,adx_prev)
             extended=bool((pd.notna(rs) and rs>=80) or (pd.notna(bm.get("breakout_distance_pct")) and bm["breakout_distance_pct"]>2))
@@ -640,7 +623,7 @@ if run or st.session_state.run:
             elif score>=45: status="🟡 WATCH / PULLBACK"
             else: status="🔴 WEAK"
 
-            final.append([x["name"],x["symbol"].upper(),round(score,1),status,round(confidence,1),round(rs,1),round(x["btc_rel_7d"],1),round(x["vr"],1),round(x["price_change_percentage_24h"],1),bm.get("daily_breakout",False),bm.get("weekly_breakout",False),bm.get("volume_confirmed",False),bm.get("close_near_high",False),bm.get("atr14",np.nan),bm.get("atr_breakout_distance",np.nan),bm.get("atr_expanding",False),bm.get("obv_breakout",False),bm.get("ema20",np.nan),bm.get("ema50",np.nan),bm.get("ema200",np.nan),bm.get("ema_bullish",False),bm.get("ema200_bullish",False),bm.get("bb_width",np.nan),bm.get("bb_expanding",False),bm.get("cmf20",np.nan),bm.get("cmf_bullish",False),bm.get("mfi14",np.nan),bm.get("mfi_bullish",False),bm.get("macd_hist",np.nan),bm.get("macd_accelerating",False),bm.get("breakout_accepted",False),bm.get("breakout_retest_held",False),bm.get("breakout_distance_pct",np.nan),bm.get("oi",np.nan),bm.get("funding",np.nan),stoch_k,stoch_d,adx_value,plus_di,minus_di,(adx_value>adx_prev if pd.notna(adx_value) and pd.notna(adx_prev) else False),"CoinGecko"])
+            final.append([x["name"],x["symbol"].upper(),round(score,1),status,round(confidence,1),round(rs,1),round(x["btc_rel_7d"],1),round(x["vr"],1),round(x["price_change_percentage_24h"],1),bm.get("daily_breakout",False),bm.get("weekly_breakout",False),bm.get("volume_confirmed",False),bm.get("close_near_high",False),bm.get("atr14",np.nan),bm.get("atr_breakout_distance",np.nan),bm.get("atr_expanding",False),bm.get("obv_breakout",False),bm.get("ema20",np.nan),bm.get("ema50",np.nan),bm.get("ema200",np.nan),bm.get("ema_bullish",False),bm.get("ema200_bullish",False),bm.get("bb_width",np.nan),bm.get("bb_expanding",False),bm.get("cmf20",np.nan),bm.get("cmf_bullish",False),bm.get("mfi14",np.nan),bm.get("mfi_bullish",False),bm.get("macd_hist",np.nan),bm.get("macd_accelerating",False),bm.get("breakout_accepted",False),bm.get("breakout_retest_held",False),bm.get("breakout_distance_pct",np.nan),bm.get("oi",np.nan),bm.get("funding",np.nan),stoch_k,stoch_d,adx_value,plus_di,minus_di,(adx_value>adx_prev if pd.notna(adx_value) and pd.notna(adx_prev) else False),f"StochRSI: {stoch_source} | ADX/DMI: {adx_source}"])
 
         finaldf=pd.DataFrame(final,columns=["Coin","Ticker","Score","Signal","Breakout confidence","Weighted RSI","BTC-rel 7d %","Vol/MCap %","24h %","Daily breakout","Weekly breakout","Volume confirmed","Close near high","ATR-14","Breakout / ATR","ATR expanding","OBV breakout","EMA20","EMA50","EMA200","EMA bullish","Above EMA200","BB width","BB expanding","CMF20","CMF bullish","MFI14","MFI bullish","MACD histogram","MACD accelerating","Breakout accepted","Retest held","Breakout distance %","Open interest","Funding rate","StochRSI %K","StochRSI %D","ADX-14","+DI","-DI","ADX rising","Data Source"])
         finaldf=finaldf.sort_values("Score",ascending=False)
