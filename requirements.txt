@@ -1,5 +1,6 @@
-streamlit>=1.40,<2
-pandas>=2.2
+streamlit>=1.45
+pandas>=2.0
 numpy>=1.26
-requests>=2.32
+requests>=2.31
 ccxt>=4.4
+
