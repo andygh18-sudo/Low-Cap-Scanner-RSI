@@ -1,6 +1,6 @@
 import streamlit as st
 
-st.set_page_config(page_title="Crypto Low-Cap TRUE BREAKOUT PRO v6", page_icon="₿", layout="wide")
+st.set_page_config(page_title="Crypto Low-Cap TRUE BREAKOUT PRO v8", page_icon="₿", layout="wide")
 
 # Dashboard refresh controls
 if "auto_refresh" not in st.session_state:
@@ -481,6 +481,290 @@ def daily_adx(coin_id,ticker=None):
     return av,pdi,mdi,ap
 
 
+
+# ------------------------- V8 DATA-CACHE ARCHITECTURE -------------------------
+# Reuse one CCXT exchange instance per scan. CCXT explicitly recommends
+# reusing exchange instances so the built-in rate limiter can work correctly.
+_EXCHANGE_CACHE = {}
+_OHLC_CACHE = {}
+_ANALYSIS_CACHE = {}
+_DERIV_CACHE = {}
+
+
+def get_exchange(exchange_name):
+    name = str(exchange_name).lower()
+    if name not in _EXCHANGE_CACHE:
+        ex = getattr(ccxt, name)({"enableRateLimit": True})
+        ex.load_markets()
+        _EXCHANGE_CACHE[name] = ex
+    return _EXCHANGE_CACHE[name]
+
+
+def _completed_ohlcv(ex, symbol, timeframe="1d", limit=260):
+    """Fetch completed candles once per exchange/symbol/timeframe per process."""
+    key = (ex.id, symbol, timeframe, int(limit))
+    if key in _OHLC_CACHE:
+        return _OHLC_CACHE[key].copy()
+    try:
+        rows = ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        if not rows:
+            d = pd.DataFrame(columns=["ts","open","high","low","close","volume"])
+        else:
+            d = pd.DataFrame(rows, columns=["ts","open","high","low","close","volume"])
+            d = d.sort_values("ts").drop_duplicates("ts").reset_index(drop=True)
+            if len(d) > 1:
+                d = d.iloc[:-1].copy()  # completed candles only
+        _OHLC_CACHE[key] = d.copy()
+        return d
+    except Exception:
+        return pd.DataFrame(columns=["ts","open","high","low","close","volume"])
+
+
+def _cache_key_coin(exchange_name, ticker):
+    return (str(exchange_name).lower(), str(ticker).upper())
+
+
+def _mtf_rsi_cached(ticker):
+    """Cache the existing rsi_engine result so each ticker is evaluated once."""
+    key = str(ticker).upper()
+    if key not in _ANALYSIS_CACHE:
+        try:
+            _ANALYSIS_CACHE[key] = multi_timeframe_rsi(key)
+        except Exception:
+            _ANALYSIS_CACHE[key] = {}
+    return _ANALYSIS_CACHE[key]
+
+
+def weighted_rsi_from_values(vals):
+    weights={"1H":.05,"4H":.10,"1D":.20,"1W":.25,"1M":.20,"3M":.20}
+    usable=[(float(v),weights[k]) for k,v in vals.items() if k in weights and pd.notna(v)]
+    if not usable:
+        return np.nan
+    return float(np.average([v for v,w in usable], weights=[w for v,w in usable]))
+
+
+def supply_quality(row):
+    """Transparent supply/FDV quality using CoinGecko market fields.
+
+    Unlock schedules are not exposed by the /coins/markets response, so v8
+    does not invent an unlock-risk number. It reports the measurable dilution
+    proxies and marks unlock data unavailable unless an external source is added.
+    """
+    circ=pd.to_numeric(pd.Series([row.get("circulating_supply",np.nan)]),errors="coerce").iloc[0]
+    total=pd.to_numeric(pd.Series([row.get("total_supply",np.nan)]),errors="coerce").iloc[0]
+    maxs=pd.to_numeric(pd.Series([row.get("max_supply",np.nan)]),errors="coerce").iloc[0]
+    mcap=pd.to_numeric(pd.Series([row.get("market_cap",np.nan)]),errors="coerce").iloc[0]
+    fdv=pd.to_numeric(pd.Series([row.get("fully_diluted_valuation",np.nan)]),errors="coerce").iloc[0]
+    circ_total=(circ/total*100) if pd.notna(circ) and pd.notna(total) and total>0 else np.nan
+    circ_max=(circ/maxs*100) if pd.notna(circ) and pd.notna(maxs) and maxs>0 else np.nan
+    fdv_mcap=(fdv/mcap) if pd.notna(fdv) and pd.notna(mcap) and mcap>0 else np.nan
+    if pd.notna(circ_max):
+        score=float(np.clip(circ_max,0,100))
+    elif pd.notna(circ_total):
+        score=float(np.clip(circ_total,0,100))
+    else:
+        score=np.nan
+    if pd.notna(fdv_mcap) and fdv_mcap>1:
+        score=max(0,score - min(30,(fdv_mcap-1)*15)) if pd.notna(score) else np.nan
+    return {"circ_pct_total":circ_total,"circ_pct_max":circ_max,"fdv_mcap":fdv_mcap,"supply_score":score,"unlock_risk":"N/A"}
+
+
+def base_quality_metrics(d):
+    """Measure consolidation/base quality before the breakout."""
+    if d is None or len(d)<65:
+        return {"base_days":np.nan,"base_range_pct":np.nan,"base_atr_pct":np.nan,"base_bb_width":np.nan,"base_quality":np.nan}
+    # Exclude the current breakout candle and measure the preceding 30 sessions.
+    x=d.iloc[-61:-1].copy() if len(d)>=61 else d.iloc[:-1].copy()
+    if len(x)<30:
+        return {"base_days":np.nan,"base_range_pct":np.nan,"base_atr_pct":np.nan,"base_bb_width":np.nan,"base_quality":np.nan}
+    base30=x.iloc[-30:]
+    mid=float(base30.close.median()) if base30.close.notna().any() else np.nan
+    rng=((float(base30.high.max())-float(base30.low.min()))/mid*100) if pd.notna(mid) and mid>0 else np.nan
+    atr=atr_series(x.high,x.low,x.close,14)
+    atr_pct=(float(atr.iloc[-1])/float(base30.close.iloc[-1])*100) if pd.notna(atr.iloc[-1]) and float(base30.close.iloc[-1])>0 else np.nan
+    bbw,_,_=bollinger_metrics(base30.close)
+    # Smaller range/ATR and a non-expanding base are preferable.
+    q=0.0
+    if pd.notna(rng): q += float(np.clip((25-rng)/25,0,1))*40
+    if pd.notna(atr_pct): q += float(np.clip((8-atr_pct)/8,0,1))*30
+    if pd.notna(bbw): q += float(np.clip((0.25-bbw)/0.25,0,1))*30
+    return {"base_days":30,"base_range_pct":rng,"base_atr_pct":atr_pct,"base_bb_width":bbw,"base_quality":q}
+
+
+def derivatives_history(ex,ticker):
+    """Current + recent OI/funding context. History is optional per exchange."""
+    key=(ex.id,str(ticker).upper())
+    if key in _DERIV_CACHE:
+        return dict(_DERIV_CACHE[key])
+    out={"oi":np.nan,"funding":np.nan,"oi_1d_pct":np.nan,"oi_3d_pct":np.nan,"oi_7d_pct":np.nan,
+         "funding_avg_1d":np.nan,"funding_avg_3d":np.nan,"funding_trend":np.nan,"derivatives_state":"N/A",
+         "oi_available":False,"funding_available":False}
+    try:
+        symbol=_find_contract_symbol(ex,ticker)
+        if not symbol:
+            _DERIV_CACHE[key]=out; return dict(out)
+        if getattr(ex,"has",{}).get("fetchOpenInterest"):
+            oi=ex.fetch_open_interest(symbol)
+            val=oi.get("openInterestValue",oi.get("openInterestAmount",np.nan))
+            if pd.notna(val): out["oi"]=float(val); out["oi_available"]=True
+        if getattr(ex,"has",{}).get("fetchOpenInterestHistory"):
+            hist=ex.fetch_open_interest_history(symbol,timeframe="1d",limit=10)
+            vals=[]
+            for h in hist or []:
+                v=h.get("openInterestValue",h.get("openInterestAmount",np.nan))
+                ts=h.get("timestamp")
+                if pd.notna(v): vals.append((ts,float(v)))
+            vals=sorted(vals,key=lambda z:z[0] if z[0] is not None else 0)
+            if vals:
+                cur=vals[-1][1]
+                def ch(n):
+                    if len(vals)>n and vals[-1-n][1]!=0:return (cur/vals[-1-n][1]-1)*100
+                    return np.nan
+                out["oi_1d_pct"]=ch(1); out["oi_3d_pct"]=ch(3); out["oi_7d_pct"]=ch(7)
+        if getattr(ex,"has",{}).get("fetchFundingRate"):
+            fr=ex.fetch_funding_rate(symbol); val=fr.get("fundingRate",np.nan)
+            if pd.notna(val): out["funding"]=float(val); out["funding_available"]=True
+        if getattr(ex,"has",{}).get("fetchFundingRateHistory"):
+            hist=ex.fetch_funding_rate_history(symbol,limit=30)
+            vals=[float(h.get("fundingRate")) for h in (hist or []) if pd.notna(h.get("fundingRate"))]
+            if vals:
+                out["funding_avg_1d"]=float(np.mean(vals[-3:]))
+                out["funding_avg_3d"]=float(np.mean(vals[-9:]))
+                out["funding_trend"]=float(vals[-1]-vals[0]) if len(vals)>1 else 0.0
+        oi_ch=out["oi_3d_pct"]
+        fr=out["funding"]
+        if pd.notna(oi_ch) and pd.notna(fr):
+            if oi_ch>5 and fr>0.0005: state="CROWDED LONGS"
+            elif oi_ch>5 and fr<0: state="SHORT-SQUEEZE FUEL"
+            elif oi_ch< -5 and fr<0: state="SHORTS COVERING / DELEVERAGING"
+            elif oi_ch>0: state="HEALTHY OI BUILD"
+            else: state="NEUTRAL"
+            out["derivatives_state"]=state
+    except Exception:
+        pass
+    _DERIV_CACHE[key]=out
+    return dict(out)
+
+
+def analysis_bundle(exchange_name, coin_row):
+    """Compute all reusable technical evidence once per coin."""
+    ticker=str(coin_row["symbol"]).upper(); cid=str(coin_row["id"]); key=(str(exchange_name).lower(),cid,ticker)
+    if key in _ANALYSIS_CACHE and isinstance(_ANALYSIS_CACHE[key],dict) and "daily" in _ANALYSIS_CACHE[key]:
+        return _ANALYSIS_CACHE[key]
+    out={"ticker":ticker,"id":cid,"daily":pd.DataFrame(),"weekly":pd.DataFrame(),"metrics":{},"rsi":{},"weighted_rsi":np.nan,
+         "stoch_k":np.nan,"stoch_d":np.nan,"stoch_source":"Unavailable","adx":np.nan,"pdi":np.nan,"mdi":np.nan,"adx_prev":np.nan,"adx_source":"Unavailable",
+         "down_beta":np.nan,"down_rel":np.nan,"down_hit":np.nan,"supply":supply_quality(coin_row),"base":{},"deriv":{}}
+    try:
+        ex=get_exchange(exchange_name)
+        sym=find_market_symbol(ex,ticker)
+        if not sym:
+            _ANALYSIS_CACHE[key]=out; return out
+        d=_completed_ohlcv(ex,sym,"1d",260); w=_completed_ohlcv(ex,sym,"1w",30)
+        out["daily"]=d; out["weekly"]=w
+        # Technical metrics from the same daily candle set.
+        if len(d)>=60:
+            cur=d.iloc[-1]; prior=d.iloc[-21:-1]; res=float(prior.high.max())
+            bm=true_breakout_metrics_cached(ex,sym,d,w,res)
+            out["metrics"]=bm
+            out["base"]=base_quality_metrics(d)
+            # BTC-down-day resilience uses timestamp-aligned daily returns.
+            out["down_beta"],out["down_rel"],out["down_hit"]=downside_resilience_cached(ex,sym)
+        vals=_mtf_rsi_cached(ticker); out["rsi"]=vals; out["weighted_rsi"]=weighted_rsi_from_values(vals)
+        # Prefer exchange daily calculations; CoinGecko is fallback.
+        if len(d)>=50:
+            sk,sd=stoch_rsi(d.close)
+            out["stoch_k"],out["stoch_d"],out["stoch_source"]=sk,sd,ex.id.upper()
+            av,pdi,mdi,ap=adx_dmi(d.high,d.low,d.close,14)
+            if all(pd.notna(v) for v in (av,pdi,mdi,ap)):
+                out["adx"],out["pdi"],out["mdi"],out["adx_prev"],out["adx_source"]=av,pdi,mdi,ap,ex.id.upper()
+        if pd.isna(out["stoch_k"]):
+            sk,sd,src=daily_stochrsi_with_source(cid,ticker); out["stoch_k"],out["stoch_d"],out["stoch_source"]=sk,sd,src
+        if pd.isna(out["adx"]):
+            av,pdi,mdi,ap,src=daily_adx_with_source(cid,ticker); out["adx"],out["pdi"],out["mdi"],out["adx_prev"],out["adx_source"]=av,pdi,mdi,ap,src
+        out["deriv"]=derivatives_history(ex,ticker)
+    except Exception:
+        pass
+    _ANALYSIS_CACHE[key]=out
+    return out
+
+
+def true_breakout_metrics_cached(ex,sym,d,w,res=None):
+    """V8 breakout calculation using already-fetched candles and exchange instance."""
+    out={"daily_resistance":np.nan,"weekly_resistance":np.nan,"daily_breakout":False,"weekly_breakout":False,"volume_confirmed":False,"close_near_high":False,"atr14":np.nan,"atr20_avg":np.nan,"atr_expanding":False,"atr_breakout_distance":np.nan,"atr_distance_confirmed":False,"obv_breakout":False,"ema20":np.nan,"ema50":np.nan,"ema200":np.nan,"ema_bullish":False,"ema200_bullish":False,"bb_width":np.nan,"bb_expanding":False,"cmf20":np.nan,"cmf_bullish":False,"mfi14":np.nan,"mfi_bullish":False,"macd_hist":np.nan,"macd_accelerating":False,"breakout_accepted":False,"breakout_retest_held":False,"breakout_distance_pct":np.nan,"rvol5":np.nan,"rvol_accelerating":False,"oi":np.nan,"funding":np.nan,"oi_available":False,"funding_available":False,"true_breakout_data":False,"breakout_exchange":ex.id,"breakout_failed":False}
+    if len(d)<60:return out
+    try:
+        cur=d.iloc[-1]; prior=d.iloc[-21:-1]; res=float(res if res is not None else prior.high.max()); avgv=float(prior.volume.mean()); vol5=float(d.volume.iloc[-6:-1].mean()) if len(d)>=6 else np.nan
+        rvol5=float(cur.volume/vol5) if pd.notna(vol5) and vol5>0 else np.nan; rng=float(cur.high-cur.low); loc=((float(cur.close)-float(cur.low))/rng) if rng>0 else 0
+        atr=atr_series(d.high,d.low,d.close,14); ac=float(atr.iloc[-1]); a20=atr.iloc[-21:-1].dropna(); aavg=float(a20.mean()) if len(a20) else np.nan; adist=(float(cur.close)-res)/ac if ac>0 else np.nan
+        obv=obv_series(d.close,d.volume); op=obv.iloc[-21:-1].dropna()
+        e20s=ema_series(d.close,20); e50s=ema_series(d.close,50); e200s=ema_series(d.close,200); e20=float(e20s.iloc[-1]); e50=float(e50s.iloc[-1]); e200=float(e200s.iloc[-1]) if pd.notna(e200s.iloc[-1]) else np.nan
+        bbw,bba,bbe=bollinger_metrics(d.close); cmf=cmf_series(d.high,d.low,d.close,d.volume); mfi=mfi_series(d.high,d.low,d.close,d.volume); mac,ms,mh,ma=macd_metrics(d.close); acc,ret,dist=acceptance_metrics(d,res)
+        wres=np.nan; wbreak=False
+        if len(w)>=21:
+            wres=float(w.iloc[-21:-1].high.max()); wbreak=float(w.iloc[-1].close)>=wres*1.0025
+        recent_closes=d.close.iloc[-6:]; prior_breakout=bool((recent_closes.iloc[:-1]>=res*1.005).any()) if len(recent_closes)>=2 else False
+        failed=bool(prior_breakout and float(recent_closes.iloc[-1])<res)
+        out.update({"daily_resistance":res,"weekly_resistance":wres,"daily_breakout":float(cur.close)>=res*1.005,"weekly_breakout":wbreak,"volume_confirmed":avgv>0 and float(cur.volume)>=avgv*1.5,"close_near_high":loc>=.75,"atr14":ac,"atr20_avg":aavg,"atr_expanding":pd.notna(aavg) and ac>=aavg*1.10,"atr_breakout_distance":adist,"atr_distance_confirmed":pd.notna(adist) and adist>=.25,"obv_breakout":pd.notna(obv.iloc[-1]) and len(op)>0 and obv.iloc[-1]>op.max(),"ema20":e20,"ema50":e50,"ema200":e200,"ema_bullish":float(cur.close)>e20>e50,"ema200_bullish":pd.notna(e200) and float(cur.close)>e200,"bb_width":bbw,"bb_expanding":bbe,"cmf20":float(cmf.iloc[-1]) if pd.notna(cmf.iloc[-1]) else np.nan,"cmf_bullish":pd.notna(cmf.iloc[-1]) and cmf.iloc[-1]>0,"mfi14":float(mfi.iloc[-1]) if pd.notna(mfi.iloc[-1]) else np.nan,"mfi_bullish":pd.notna(mfi.iloc[-1]) and 50<=mfi.iloc[-1]<85,"macd_hist":mh,"macd_accelerating":bool(ma and pd.notna(mac) and pd.notna(ms) and mac>ms and mh>0),"breakout_accepted":acc,"breakout_retest_held":ret,"breakout_distance_pct":dist,"rvol5":rvol5,"rvol_accelerating":pd.notna(rvol5) and rvol5>=1.5 and float(cur.volume)>=avgv*1.5,"breakout_failed":failed,"true_breakout_data":True})
+        return out
+    except Exception:return out
+
+
+def downside_resilience_cached(ex,sym):
+    """Timestamp-aligned downside resilience using the same exchange instance."""
+    try:
+        btc_sym=find_market_symbol(ex,"BTC")
+        if not btc_sym:return np.nan,np.nan,np.nan
+        a=_completed_ohlcv(ex,sym,"1d",90); b=_completed_ohlcv(ex,btc_sym,"1d",90)
+        if len(a)<35 or len(b)<35:return np.nan,np.nan,np.nan
+        ar=a.set_index("ts").close.pct_change(); br=b.set_index("ts").close.pct_change()
+        q=pd.concat([ar.rename("coin"),br.rename("btc")],axis=1,join="inner").dropna(); q=q[q.btc<0]
+        if len(q)<5:return np.nan,np.nan,np.nan
+        beta=float(q.coin.cov(q.btc)/q.btc.var()) if q.btc.var()>0 else np.nan
+        rel=float((q.coin-q.btc).mean()*100); hit=float((q.coin>q.btc).mean()*100)
+        return beta,rel,hit
+    except Exception:return np.nan,np.nan,np.nan
+
+
+def breakout_state(m):
+    """State machine for breakout lifecycle."""
+    if m.get("breakout_failed"): return "🚨 BREAKOUT FAILED"
+    if m.get("daily_breakout") and m.get("weekly_breakout"):
+        if m.get("breakout_retest_held"): return "🚀 RETEST HELD"
+        if m.get("breakout_accepted"): return "🟢 BREAKOUT ACCEPTED"
+        return "🟡 BREAKOUT ATTEMPT"
+    return "⚪ BASE / PRE-BREAKOUT"
+
+
+def technical_score_v8(m,rs,btc_rel,base,supply,down_rel,down_hit):
+    """Clean 0-100 technical score. Regime is deliberately separate."""
+    parts=[]
+    def add(v,w): parts.append(float(np.clip(v,0,1))*w)
+    add(1 if m.get("daily_breakout") else 0,15)
+    add(1 if m.get("weekly_breakout") else 0,8)
+    add(1 if m.get("volume_confirmed") else 0,10)
+    add(1 if m.get("obv_breakout") else 0,8)
+    add(1 if m.get("close_near_high") else 0,5)
+    add(1 if m.get("atr_distance_confirmed") else 0,6)
+    add(1 if m.get("atr_expanding") else 0,5)
+    add(1 if m.get("ema_bullish") else 0,7)
+    add(1 if m.get("ema200_bullish") else 0,4)
+    add(1 if m.get("cmf_bullish") else 0,4)
+    add(1 if m.get("mfi_bullish") else 0,3)
+    add(1 if m.get("macd_accelerating") else 0,5)
+    add(1 if m.get("bb_expanding") else 0,4)
+    add(1 if m.get("breakout_accepted") else 0,4)
+    add(1 if m.get("breakout_retest_held") else 0,6)
+    if pd.notna(rs): add(1 if 45<=rs<75 else (0.5 if 35<=rs<85 else 0),4)
+    if pd.notna(btc_rel): add(np.clip((btc_rel+5)/15,0,1),4)
+    if pd.notna(down_rel): add(np.clip((down_rel+5)/10,0,1),2)
+    if pd.notna(down_hit): add(np.clip(down_hit/100,0,1),2)
+    if pd.notna(base.get("base_quality")): add(base["base_quality"]/100,2)
+    return float(np.clip(sum(parts),0,100))
+
+
+def confidence_v8(m,rs,sk,sd,av,pdi,mdi,ap,btc_rel):
+    return breakout_confidence(m,btc_rel,m.get("vr",np.nan),rs,sk,sd,av,pdi,mdi,ap)
+
 def true_breakout_metrics(exchange_name,ticker):
     """TRUE BREAKOUT PRO metrics: structure, volatility, volume flow, trend, momentum and acceptance."""
     out={"daily_resistance":np.nan,"weekly_resistance":np.nan,"daily_breakout":False,"weekly_breakout":False,"volume_confirmed":False,"close_near_high":False,"atr14":np.nan,"atr20_avg":np.nan,"atr_expanding":False,"atr_breakout_distance":np.nan,"atr_distance_confirmed":False,"obv_breakout":False,"ema20":np.nan,"ema50":np.nan,"ema200":np.nan,"ema_bullish":False,"ema200_bullish":False,"bb_width":np.nan,"bb_expanding":False,"cmf20":np.nan,"cmf_bullish":False,"mfi14":np.nan,"mfi_bullish":False,"macd_hist":np.nan,"macd_accelerating":False,"breakout_accepted":False,"breakout_retest_held":False,"breakout_distance_pct":np.nan,"rvol5":np.nan,"rvol_accelerating":False,"oi":np.nan,"funding":np.nan,"oi_available":False,"funding_available":False,"true_breakout_data":False,"breakout_exchange":None,"breakout_failed":False}
@@ -616,8 +900,8 @@ def btc_market_context(exchange_name):
     except Exception:
         return None
 
-st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO Scanner")
-st.caption("Background scanner + dashboard: volume surge + BTC-relative strength + RSI + downside resilience")
+st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8 Scanner")
+st.caption("v8: cached multi-layer market analysis + 50–100 candidate pre-screen + structural breakout state machine")
 
 # Show the latest GitHub Actions background result if available.
 try:
@@ -649,244 +933,152 @@ with st.sidebar:
 
 
 
-# BTC benchmark panel
-try:
-    btc_ctx = btc_market_context(exchange)
-    if btc_ctx:
-        st.subheader("₿ Bitcoin Market Benchmark")
-        bc1,bc2,bc3,bc4,bc5,bc6 = st.columns(6)
-        bc1.metric("BTC Price", f"${btc_ctx['price']:,.0f}")
-        bc2.metric("BTC 24h", f"{btc_ctx['24h']:.2f}%")
-        bc3.metric("BTC 7d", f"{btc_ctx['7d']:.2f}%")
-        bc4.metric("Weighted RSI", f"{btc_ctx['weighted_rsi']:.1f}" if pd.notna(btc_ctx['weighted_rsi']) else "N/A")
-        bc5.metric("ADX-14", f"{btc_ctx['adx']:.1f}" if pd.notna(btc_ctx['adx']) else "N/A")
-        bc6.metric("BTC Signal", btc_ctx['status'])
-        btc_table = pd.DataFrame([{
-            "Daily breakout": btc_ctx["daily_breakout"],
-            "Weekly breakout": btc_ctx["weekly_breakout"],
-            "Volume confirmed": btc_ctx["volume_confirmed"],
-            "Close near high": btc_ctx["close_near_high"],
-            "StochRSI %K": btc_ctx["stoch_k"],
-            "StochRSI %D": btc_ctx["stoch_d"],
-            "+DI": btc_ctx["plus_di"],
-            "-DI": btc_ctx["minus_di"],
-            "ADX rising": btc_ctx["adx_rising"],
-            "Data Source": f"StochRSI: {btc_ctx.get('stoch_source','Unavailable')} | ADX/DMI: {btc_ctx.get('adx_source','Unavailable')}",
-        }])
-        st.dataframe(btc_table.round(1), use_container_width=True, hide_index=True)
-        st.caption("BTC is treated as the benchmark: BTC-relative strength and the low-cap volume/MCap threshold are not applied to BTC itself.")
-except Exception as e:
-    st.warning(f"BTC benchmark unavailable: {e}")
+
+# ------------------------------ V8 DASHBOARD ------------------------------
+with st.sidebar:
+    st.header("Filters")
+    mincap=st.number_input("Min market cap ($M)", min_value=20.0, max_value=1000.0, value=20.0, step=10.0, format="%.1f")
+    maxcap=st.number_input("Max market cap ($M)", min_value=50.0, max_value=2000.0, value=500.0, step=25.0, format="%.1f")
+    minvol=st.number_input("Min 24h volume ($M)", min_value=0.5, max_value=500.0, value=2.0, step=0.5, format="%.1f")
+    minvr=st.number_input("Min volume / market cap (%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0, format="%.1f")
+    preselect=st.slider("Technical pre-screen size", min_value=50, max_value=100, value=60, step=10)
+    exchange=st.selectbox("Exchange candles",["bybit","okx","kraken"],index=0)
+    run=st.button("🚀 Run full scanner",type="primary")
+    st.caption("v8 analyses a broad pre-screen before applying the expensive structural breakout engine. ZEN is always retained.")
+
+st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8")
+st.caption("Cached technical engine + 50–100 pre-screen + breakout lifecycle + supply quality + downside resilience")
 
 if "run" not in st.session_state: st.session_state.run=True
-
 if run or st.session_state.run:
     try:
-        with st.spinner("Scanning CoinGecko Top 500…"):
+        with st.spinner("Loading market universe with CoinGecko 429 protection…"):
             df=cg_markets()
-            if getattr(df, "attrs", {}).get("coingecko_warning"):
-                st.warning(df.attrs["coingecko_warning"] + " — continuing with the available market universe.")
-        df["mcap_m"]=df.market_cap/1e6
-        df["vol_m"]=df.total_volume/1e6
-        df["vr"]=df.total_volume/df.market_cap*100
-        df["btc_rel_7d"]=np.nan
-
-        btc=df[df.id=="bitcoin"]
-        btc7=float(btc["price_change_percentage_7d_in_currency"].iloc[0]) if not btc.empty else 0
-        btc24=float(btc["price_change_percentage_24h"].iloc[0]) if not btc.empty else 0
-        candidates=df[df.mcap_m.between(mincap,maxcap)&(df.vol_m>=minvol)&(df.vr>=minvr)].copy()
+        if df.empty:
+            st.error("No market-universe data returned.")
+            st.stop()
+        warning=getattr(df,"attrs",{}).get("coingecko_warning")
+        if warning: st.warning(str(warning)+" — continuing with available universe.")
+        df["mcap_m"]=pd.to_numeric(df.market_cap,errors="coerce")/1e6
+        df["vol_m"]=pd.to_numeric(df.total_volume,errors="coerce")/1e6
+        df["vr"]=pd.to_numeric(df.total_volume,errors="coerce")/pd.to_numeric(df.market_cap,errors="coerce")*100
         stable={"tether","usd-coin","dai","usds","true-usd","usdd"}
-        candidates=candidates[~candidates.id.isin(stable)].copy()
-
-        # Always retain ZEN.
-        zen=df[df.id==ZEN_ID]
-        if not zen.empty:
-            candidates=pd.concat([candidates,zen],ignore_index=True).drop_duplicates("id")
-
-        candidates["btc_rel_7d"]=candidates["price_change_percentage_7d_in_currency"]-btc7
+        btc=df[df.id.eq("bitcoin")]
+        btc7=float(btc["price_change_percentage_7d_in_currency"].iloc[0]) if not btc.empty and pd.notna(btc["price_change_percentage_7d_in_currency"].iloc[0]) else 0.0
+        btc24=float(btc["price_change_percentage_24h"].iloc[0]) if not btc.empty and pd.notna(btc["price_change_percentage_24h"].iloc[0]) else 0.0
+        candidates=df[df.mcap_m.between(mincap,maxcap)&(df.vol_m>=minvol)&(df.vr>=minvr)&~df.id.isin(stable)].copy()
+        zen=df[df.id.eq(ZEN_ID)]
+        if not zen.empty: candidates=pd.concat([candidates,zen],ignore_index=True).drop_duplicates("id")
+        candidates["btc_rel_7d"]=pd.to_numeric(candidates["price_change_percentage_7d_in_currency"],errors="coerce")-btc7
         candidates["vol_score"]=np.clip(candidates.vr/25*20,0,20)
         candidates["mom_score"]=np.clip((candidates["price_change_percentage_24h"]+10)*0.8,0,20)
         candidates["rel_score"]=np.clip((candidates.btc_rel_7d+10)*0.4,0,20)
         candidates["liq_score"]=np.clip(candidates.vr/10,0,20)
         candidates["base_score"]=candidates.vol_score+candidates.mom_score+candidates.rel_score+candidates.liq_score
-
-        top15=candidates.sort_values("base_score",ascending=False).head(15).copy()
-        zen_top=candidates[candidates.id==ZEN_ID]
-        top=pd.concat([top15,zen_top],ignore_index=True).drop_duplicates("id").head(16).copy()
-        st.subheader("Market scan")
-        a,b,c,d=st.columns(4)
-        a.metric("Candidates",len(candidates))
-        b.metric("BTC 24h",f"{btc24:.2f}%")
-        c.metric("BTC 7d",f"{btc7:.2f}%")
-        c.metric("Exchange",exchange.upper())
-        d.metric("Updated",datetime.now(timezone.utc).strftime("%H:%M UTC"))
-
-        view=top[["name","symbol","mcap_m","vol_m","vr","price_change_percentage_24h",
-                  "price_change_percentage_7d_in_currency","btc_rel_7d","base_score"]].copy()
-        view.columns=["Coin","Ticker","MCap $M","Vol $M","Vol/MCap %","24h %","7d %","BTC-rel 7d %","Base score"]
+        # Broad pre-screen: 50–100 candidates, not 15. ZEN is always retained.
+        presel=candidates.sort_values("base_score",ascending=False).head(int(preselect)).copy()
+        if not zen.empty:
+            presel=pd.concat([presel,zen],ignore_index=True).drop_duplicates("id")
+        # Limit the expensive derivatives history to the pre-screen itself; all other metrics are cached.
+        st.subheader("Market universe")
+        c1,c2,c3,c4,c5=st.columns(5)
+        c1.metric("Filtered candidates",len(candidates)); c2.metric("Pre-screen",len(presel)); c3.metric("BTC 24h",f"{btc24:.2f}%"); c4.metric("BTC 7d",f"{btc7:.2f}%"); c5.metric("Exchange",exchange.upper())
+        view=presel[["name","symbol","mcap_m","vol_m","vr","price_change_percentage_24h","price_change_percentage_7d_in_currency","btc_rel_7d","base_score"]].copy()
+        view.columns=["Coin","Ticker","MCap $M","Vol $M","Vol/MCap %","24h %","7d %","BTC-rel 7d %","Pre-screen score"]
         st.dataframe(view.round(2),use_container_width=True,hide_index=True)
 
-        st.subheader("Multi-timeframe RSI heatmap")
+        # One analysis bundle per pre-screen coin. This is the core v8 cache architecture.
+        bundles={}
+        progress=st.progress(0,text="Building cached technical bundles…")
+        total=max(1,len(presel))
+        for i,(_,x) in enumerate(presel.iterrows(),1):
+            bundles[str(x["id"])] = analysis_bundle(exchange,x)
+            progress.progress(i/total,text=f"Analysing {i}/{total}: {str(x['symbol']).upper()}")
+        progress.empty()
+
+        # Build RSI heatmap from the same cached values used by final scoring.
         rows=[]
-        weights={"1H":.05,"4H":.10,"1D":.20,"1W":.25,"1M":.20,"3M":.20}
-        for _,x in top.head(10).iterrows():
-            vals = multi_timeframe_rsi(str(x["symbol"]).upper())
-            usable=[(v,weights[k]) for k,v in vals.items() if pd.notna(v)]
-            score=np.average([v for v,w in usable],weights=[w for v,w in usable]) if usable else np.nan
-            deep=sum(pd.notna(v) and v<30 for v in vals.values())>=2
-            bull=sum(pd.notna(v) and v>=60 for v in vals.values())>=4
-            bear=sum(pd.notna(v) and v<=40 for v in vals.values())>=4
-            over=sum(pd.notna(v) and v>70 for v in vals.values())>=3
-            row={"Coin":x["name"],"Ticker":x["symbol"].upper(),**vals,
-                 "Weighted RSI":score,"Deep oversold":deep,"Bullish alignment":bull,
-                 "Bearish alignment":bear,"Overbought":over}
+        for _,x in presel.iterrows():
+            b=bundles[str(x.id)]; vals=b["rsi"]; row={"Coin":x["name"],"Ticker":str(x["symbol"]).upper(),**vals,"Weighted RSI":b["weighted_rsi"]}
+            row["Deep oversold"]=sum(pd.notna(v) and v<30 for v in vals.values())>=2
+            row["Bullish alignment"]=sum(pd.notna(v) and v>=60 for v in vals.values())>=4
+            row["Bearish alignment"]=sum(pd.notna(v) and v<=40 for v in vals.values())>=4
+            row["Overbought"]=sum(pd.notna(v) and v>70 for v in vals.values())>=3
             rows.append(row)
         heat=pd.DataFrame(rows)
-        display_heat = heat.copy()
-        for col in ["1H","4H","1D","1W","1M","3M"]:
-            if col in display_heat.columns:
-                display_heat[col] = display_heat[col].apply(lambda v: "N/A" if pd.isna(v) else round(float(v), 1))
-        st.dataframe(display_heat,use_container_width=True,hide_index=True)
-        st.caption("N/A = insufficient exchange history for a valid RSI-14, not a zero value.")
-        st.subheader("Daily StochRSI")
-        stoch_rows = []
-        for _, x in top.head(10).iterrows():
-            k, d, stoch_source = daily_stochrsi_with_source(str(x["id"]), str(x["symbol"]).upper())
-            if pd.isna(k) or pd.isna(d):
-                stoch_signal = "N/A"
-            elif k < 20 and k > d:
-                stoch_signal = "🟢 OVERSOLD BULLISH CROSS"
-            elif k > 80 and k < d:
-                stoch_signal = "🔴 OVERBOUGHT BEARISH CROSS"
-            elif k > d:
-                stoch_signal = "🟢 BULLISH"
-            else:
-                stoch_signal = "🔴 BEARISH"
-            stoch_rows.append({
-                "Coin": x["name"], "Ticker": str(x["symbol"]).upper(),
-                "StochRSI %K": k, "StochRSI %D": d, "Data Source": stoch_source, "Signal": stoch_signal
-            })
-        stochdf = pd.DataFrame(stoch_rows)
-        if not stochdf.empty:
-            stoch_display = stochdf.copy()
-            for col in ["StochRSI %K", "StochRSI %D"]:
-                stoch_display[col] = stoch_display[col].apply(lambda v: "N/A" if pd.isna(v) else round(float(v), 1))
-            st.dataframe(stoch_display, use_container_width=True, hide_index=True)
-        st.caption("Daily StochRSI uses RSI-14, StochRSI-14, %K 3, %D 3 on completed daily candles. CoinGecko is used first, with Bybit → OKX → Kraken fallback when CoinGecko history is unavailable or rate-limited. <20 is oversold; >80 is overbought.")
+        st.subheader("Multi-timeframe RSI heatmap — cached")
+        st.dataframe(heat.round(1),use_container_width=True,hide_index=True)
 
-        st.subheader("Daily ADX / DMI")
-        adx_rows = []
-        for _, x in top.head(10).iterrows():
-            av, pdi, mdi, ap, adx_source = daily_adx_with_source(str(x["id"]), str(x["symbol"]).upper())
-            if pd.isna(av):
-                adx_signal = "N/A"
-            elif av >= 25 and pdi > mdi and av > ap:
-                adx_signal = "🟢 STRONG + RISING BULLISH TREND"
-            elif av >= 25 and pdi > mdi:
-                adx_signal = "🟢 STRONG BULLISH TREND"
-            elif av >= 25 and mdi > pdi:
-                adx_signal = "🔴 STRONG BEARISH TREND"
-            elif av >= 20:
-                adx_signal = "🟡 TREND DEVELOPING"
-            else:
-                adx_signal = "⚪ WEAK / RANGE"
-            adx_rows.append({"Coin": x["name"], "Ticker": str(x["symbol"]).upper(),
-                             "ADX-14": av, "+DI": pdi, "-DI": mdi,
-                             "ADX rising": (bool(av > ap) if pd.notna(av) and pd.notna(ap) else False),
-                             "Data Source": adx_source,
-                             "Signal": adx_signal})
-        adxdf = pd.DataFrame(adx_rows)
-        if not adxdf.empty:
-            adx_display = adxdf.copy()
-            for col in ["ADX-14", "+DI", "-DI"]:
-                adx_display[col] = adx_display[col].apply(lambda v: "N/A" if pd.isna(v) else round(float(v), 1))
-            st.dataframe(adx_display, use_container_width=True, hide_index=True)
-        st.caption("ADX-14 measures trend strength; +DI/-DI provide direction. ADX >25 is a common strong-trend reference, while rising ADX indicates strengthening trend.")
+        # Simple regime context remains separate from technical score.
+        breadth=float((candidates["price_change_percentage_24h"]>0).mean()*100) if len(candidates) else 0
+        if btc24>2 and btc7>3 and breadth>=55: regime="RISK-ON"; regime_score=85
+        elif btc24<-3 and btc7<-5 and breadth<35: regime="RISK-OFF"; regime_score=25
+        else: regime="MIXED / TRANSITION"; regime_score=55
+        r1,r2,r3=st.columns(3); r1.metric("Regime",regime); r2.metric("Low-cap breadth",f"{breadth:.0f}%"); r3.metric("Regime score",regime_score)
 
-        st.subheader("Crypto regime filter")
-        # Simple, transparent regime proxy from BTC 24h/7d and market breadth.
-        breadth = float((candidates["price_change_percentage_24h"] > 0).mean() * 100) if len(candidates) else 0
-        if btc24 > 2 and btc7 > 3 and breadth >= 55:
-            regime, regime_adj = "RISK-ON", 1.00
-        elif btc24 < -3 and btc7 < -5 and breadth < 35:
-            regime, regime_adj = "RISK-OFF", 0.65
-        else:
-            regime, regime_adj = "MIXED / TRANSITION", 0.85
-        r1,r2,r3=st.columns(3)
-        r1.metric("Regime",regime)
-        r2.metric("Low-cap breadth",f"{breadth:.0f}%")
-        r3.metric("Regime multiplier",f"{regime_adj:.2f}")
-
-        st.subheader("0–100 unified scanner score")
         final=[]
-        for _,x in top.iterrows():
-            rr=heat[heat.Ticker.eq(str(x.symbol).upper())]
-            rs=float(rr["Weighted RSI"].iloc[0]) if not rr.empty and pd.notna(rr["Weighted RSI"].iloc[0]) else 50
-
-            # RSI: reward constructive 45-70, avoid chasing extreme overbought.
-            rsi_component=max(0,20-abs(rs-57)*0.45)
-
-            # Trend / breakout component from 24h and 7d momentum.
-            trend_component=min(10,max(0,(float(x["price_change_percentage_24h"])+5)*1.0))
-            rel_component=min(10,max(0,(float(x["btc_rel_7d"])+5)*0.5))
-
-            # Volume confirmation and liquidity.
-            volume_component=min(15,max(0,float(x["vr"])/2))
-            liquidity_component=min(5,max(0,float(x["vol_m"])/10))
-
-            # ADX/DMI: 10 points. Reward a strong, rising bullish trend;
-            # do not reward high ADX by itself because ADX has no direction.
-            adx_value, plus_di, minus_di, adx_prev, adx_source = daily_adx_with_source(str(x["id"]), str(x["symbol"]).upper())
-            if pd.isna(adx_value):
-                adx_component = 0.0
-            else:
-                strength = np.clip((float(adx_value) - 15.0) / 20.0, 0.0, 1.0)
-                direction = 1.0 if pd.notna(plus_di) and pd.notna(minus_di) and float(plus_di) > float(minus_di) else 0.0
-                rising = 1.0 if pd.notna(adx_prev) and float(adx_value) > float(adx_prev) else 0.5
-                adx_component = 10.0 * strength * direction * rising
-
-            # Components total 100 before regime adjustment.
-            raw = rsi_component + trend_component + rel_component + volume_component + liquidity_component + adx_component + 30
-            score = min(100,max(0,raw*regime_adj))
-
-            # TRUE BREAKOUT PRO confirmation and extension control.
-            bm=true_breakout_metrics(exchange,str(x["symbol"]).upper()); down_beta,down_rel,down_hit=downside_resilience(exchange,str(x["symbol"]).upper()); bm["downside_beta"]=down_beta; bm["btc_down_day_rel_pct"]=down_rel; bm["btc_down_day_outperform_pct"]=down_hit; stoch_k,stoch_d,stoch_source=daily_stochrsi_with_source(str(x["id"]), str(x["symbol"]).upper())
-            confidence=breakout_confidence(bm,x["btc_rel_7d"],x["vr"],rs,stoch_k,stoch_d,adx_value,plus_di,minus_di,adx_prev)
-            true_break=is_true_breakout(bm,x["btc_rel_7d"],x["vr"],rs,stoch_k,stoch_d,adx_value,plus_di,minus_di,adx_prev)
-            extended=bool((pd.notna(rs) and rs>=80) or (pd.notna(bm.get("breakout_distance_pct")) and bm["breakout_distance_pct"]>2))
-            if bm.get("breakout_failed"): status="🚨 BREAKOUT FAILED"
+        for _,x in presel.iterrows():
+            b=bundles[str(x.id)]; m=dict(b["metrics"]); m["vr"]=float(x["vr"]); rs=b["weighted_rsi"]; sk=b["stoch_k"]; sd=b["stoch_d"]; av=b["adx"]; pdi=b["pdi"]; mdi=b["mdi"]; ap=b["adx_prev"]; btc_rel=float(x["btc_rel_7d"]); base=b["base"]; supply=b["supply"]; der=b["deriv"]
+            m.update({"btc_down_day_rel_pct":b["down_rel"]})
+            tech=technical_score_v8(m,rs,btc_rel,base,supply,b["down_rel"],b["down_hit"])
+            confidence=confidence_v8(m,rs,sk,sd,av,pdi,mdi,ap,btc_rel)
+            true_break=is_true_breakout(m,btc_rel,float(x["vr"]),rs,sk,sd,av,pdi,mdi,ap)
+            state=breakout_state(m)
+            # Risk-adjusted score is separate from technical score.
+            risk_adj=tech*(0.70+0.003*regime_score)
+            if pd.notna(supply.get("supply_score")): risk_adj += (supply["supply_score"]-50)*0.05
+            if pd.notna(b["down_hit"]): risk_adj += (b["down_hit"]-50)*0.04
+            if pd.notna(b["down_rel"]): risk_adj += np.clip(b["down_rel"]*0.3,-5,5)
+            risk_adj=float(np.clip(risk_adj,0,100))
+            extended=bool((pd.notna(rs) and rs>=80) or (pd.notna(m.get("breakout_distance_pct")) and m["breakout_distance_pct"]>2))
+            if m.get("breakout_failed"): status="🚨 BREAKOUT FAILED"
             elif true_break and confidence>=90 and not extended: status="🚀 HIGH-CONVICTION TRUE BREAKOUT"
             elif true_break and extended: status="🚀 TRUE BREAKOUT — EXTENDED / WAIT FOR RETEST"
             elif true_break: status="🟢 TRUE BREAKOUT"
-            elif confidence>=80: status="🟢 BREAKOUT CONFIRMED"
-            elif confidence>=70: status="🟡 STRONG BREAKOUT WATCH"
-            elif rs>=80 and score>=60: status="🟠 EXTENDED — WAIT FOR RESET"
-            elif float(x["btc_rel_7d"])>10 and float(x["vr"])>=20 and rs<70: status="💪 RELATIVE-STRENGTH LEADER"
-            elif score>=75: status="🟢 STRONG SETUP"
-            elif score>=60: status="🟢 MOMENTUM CONFIRMED"
-            elif score>=45: status="🟡 WATCH / PULLBACK"
+            elif confidence>=80: status="🟢 BREAKOUT CONFIRMATION"
+            elif state=="🟡 BREAKOUT ATTEMPT": status="🟡 BREAKOUT WATCH"
+            elif risk_adj>=75: status="🟢 STRONG SETUP"
+            elif risk_adj>=60: status="🟢 MOMENTUM CONFIRMED"
+            elif risk_adj>=45: status="🟡 WATCH / PULLBACK"
             else: status="🔴 WEAK"
+            final.append({
+                "Coin":x["name"],"Ticker":str(x["symbol"]).upper(),"Technical score":round(tech,1),"Risk-adjusted score":round(risk_adj,1),"Signal":status,"Breakout state":state,"Breakout confidence":round(confidence,1),"Weighted RSI":round(rs,1) if pd.notna(rs) else np.nan,"BTC-rel 7d %":round(btc_rel,1),"Vol/MCap %":round(float(x["vr"]),1),"MCap $M":round(float(x["mcap_m"]),1),"24h %":round(float(x["price_change_percentage_24h"]),1),
+                "Daily breakout":m.get("daily_breakout",False),"Weekly breakout":m.get("weekly_breakout",False),"Volume confirmed":m.get("volume_confirmed",False),"OBV breakout":m.get("obv_breakout",False),"ATR expanding":m.get("atr_expanding",False),"EMA bullish":m.get("ema_bullish",False),"Breakout accepted":m.get("breakout_accepted",False),"Retest held":m.get("breakout_retest_held",False),"Breakout distance %":m.get("breakout_distance_pct",np.nan),"RVOL 5D":m.get("rvol5",np.nan),
+                "Base quality":base.get("base_quality",np.nan),"Base range %":base.get("base_range_pct",np.nan),"Supply score":supply.get("supply_score",np.nan),"Circulating % max":supply.get("circ_pct_max",np.nan),"FDV/MCap":supply.get("fdv_mcap",np.nan),"Unlock risk":supply.get("unlock_risk","N/A"),
+                "Downside beta":b["down_beta"],"BTC-down-day rel %":b["down_rel"],"BTC-down-day outperform %":b["down_hit"],"OI 1D %":der.get("oi_1d_pct",np.nan),"OI 3D %":der.get("oi_3d_pct",np.nan),"OI 7D %":der.get("oi_7d_pct",np.nan),"Funding":der.get("funding",np.nan),"Funding 3D avg":der.get("funding_avg_3d",np.nan),"Derivatives state":der.get("derivatives_state","N/A"),
+                "StochRSI %K":sk,"StochRSI %D":sd,"ADX":av,"+DI":pdi,"-DI":mdi,"ADX rising":bool(pd.notna(av) and pd.notna(ap) and av>ap),"Data sources":f"RSI: cached engine | Stoch: {b['stoch_source']} | ADX: {b['adx_source']} | OHLCV: {exchange.upper()}"
+            })
+        finaldf=pd.DataFrame(final).sort_values("Risk-adjusted score",ascending=False)
+        st.subheader("TRUE BREAKOUT PRO v8 — final ranking")
+        st.dataframe(finaldf.round(2),use_container_width=True,hide_index=True)
 
-            final.append([x["name"],x["symbol"].upper(),round(score,1),status,round(confidence,1),round(rs,1),round(x["btc_rel_7d"],1),round(x["vr"],1),round(x["price_change_percentage_24h"],1),bm.get("daily_breakout",False),bm.get("weekly_breakout",False),bm.get("volume_confirmed",False),bm.get("close_near_high",False),bm.get("atr14",np.nan),bm.get("atr_breakout_distance",np.nan),bm.get("atr_expanding",False),bm.get("obv_breakout",False),bm.get("ema20",np.nan),bm.get("ema50",np.nan),bm.get("ema200",np.nan),bm.get("ema_bullish",False),bm.get("ema200_bullish",False),bm.get("bb_width",np.nan),bm.get("bb_expanding",False),bm.get("cmf20",np.nan),bm.get("cmf_bullish",False),bm.get("mfi14",np.nan),bm.get("mfi_bullish",False),bm.get("macd_hist",np.nan),bm.get("macd_accelerating",False),bm.get("breakout_accepted",False),bm.get("breakout_retest_held",False),bm.get("breakout_distance_pct",np.nan),bm.get("rvol5",np.nan),bm.get("rvol_accelerating",False),bm.get("breakout_failed",False),bm.get("downside_beta",np.nan),bm.get("btc_down_day_rel_pct",np.nan),bm.get("btc_down_day_outperform_pct",np.nan),bm.get("oi",np.nan),bm.get("funding",np.nan),stoch_k,stoch_d,adx_value,plus_di,minus_di,(adx_value>adx_prev if pd.notna(adx_value) and pd.notna(adx_prev) else False),f"StochRSI: {stoch_source} | ADX/DMI: {adx_source}"])
+        # Focus table: strongest structural candidates only.
+        focus=finaldf[(finaldf["Signal"].str.contains("BREAKOUT|SETUP",regex=True)) | finaldf["Ticker"].eq("ZEN")].head(15)
+        st.subheader("⭐ Breakout focus")
+        st.dataframe(focus.round(2),use_container_width=True,hide_index=True)
 
-        finaldf=pd.DataFrame(final,columns=["Coin","Ticker","Score","Signal","Breakout confidence","Weighted RSI","BTC-rel 7d %","Vol/MCap %","24h %","Daily breakout","Weekly breakout","Volume confirmed","Close near high","ATR-14","Breakout / ATR","ATR expanding","OBV breakout","EMA20","EMA50","EMA200","EMA bullish","Above EMA200","BB width","BB expanding","CMF20","CMF bullish","MFI14","MFI bullish","MACD histogram","MACD accelerating","Breakout accepted","Retest held","Breakout distance %","RVOL 5D","RVOL accelerating","Breakout failed","Downside beta","BTC-down-day rel %","BTC-down-day outperform %","Open interest","Funding rate","StochRSI %K","StochRSI %D","ADX-14","+DI","-DI","ADX rising","Data Source"])
-        finaldf=finaldf.sort_values("Score",ascending=False)
-        st.dataframe(finaldf,use_container_width=True,hide_index=True)
-        st.caption("TRUE BREAKOUT PRO: structure + volume/OBV + ATR + EMA + volatility + money flow + MACD + acceptance/retest + optional derivatives.")
-
-        st.subheader("Scanner rules")
+        st.subheader("v8 architecture / rules")
         st.markdown("""
-        **TRUE BREAKOUT CORE:** 20-day + 20-week breakout, volume ≥1.5× prior 20-day average, close in top 25%, breakout ≥0.25 ATR-14, ATR expanding ≥10%, OBV new 20-day high, BTC-relative 7D ≥+5pp, volume/MCap ≥10%, weighted RSI <75%, bullish StochRSI, ADX-14 ≥25 and rising, +DI−DI ≥5, and EMA20 > EMA50 when available.
+**1. Data cache:** one CCXT exchange instance and one OHLCV dataset per exchange/symbol/timeframe are reused across all indicators.
 
-**FAILURE CONTROL:** a post-breakout close back below resistance is labelled **🚨 BREAKOUT FAILED**. Retest-held confirmation is tracked separately rather than treating every initial breakout as fully confirmed.
+**2. Broad pre-screen:** 50–100 candidates are analysed before the expensive structural breakout engine; ZEN is always retained.
 
-        **CONFIDENCE 0–100:** adds EMA200, Bollinger expansion, CMF, MFI, MACD acceleration, breakout acceptance/retest, stronger BTC-relative strength, optional open interest and funding.
+**3. Clean scoring:** Technical Quality is 0–100; Regime Score and Risk-Adjusted Score are separate.
 
-        **EXTENSION CONTROL:** confirmed breakouts >~2% above resistance or weighted RSI ≥80 are labelled extended / wait for retest.
+**4. TRUE BREAKOUT:** retains the v7 structural gate — daily/weekly breakout, volume, candle quality, ATR distance/expansion, OBV, BTC-relative strength, RSI, StochRSI, ADX/DMI and EMA alignment.
 
-        **Important:** this is a ranking/filtering engine, not a prediction or buy/sell system. Derivatives are optional and never block a signal when unavailable.
+**5. Breakout lifecycle:** BASE → BREAKOUT ATTEMPT → BREAKOUT ACCEPTED → RETEST HELD, with explicit BREAKOUT FAILED state.
+
+**6. Derivatives:** current OI/funding plus recent OI/funding history when the exchange supports the CCXT unified methods; derivatives are context, not an automatic buy/sell gate.
+
+**7. Base quality:** measures pre-breakout consolidation range, ATR and Bollinger compression.
+
+**8. Supply quality:** circulating/max supply and FDV/MCap are included. Unlock schedules are explicitly shown as N/A because they are not available from the current CoinGecko market-universe response; v8 does not invent unlock data.
+
+**9. Downside resilience:** BTC-down-day beta, average relative performance and outperform rate are timestamp-aligned.
+
+**10. Data reuse:** RSI, StochRSI, ADX, OHLCV, derivatives and downside-resilience results are reused rather than recomputed in separate dashboard sections.
         """)
-
-        st.info("The scanner is designed to surface candidates for further analysis. It does not execute trades and does not provide financial advice.")
+        st.caption("v8 is a research/ranking engine. It does not execute trades or guarantee outcomes.")
     except Exception as e:
         st.error(f"Scanner error: {e}")
