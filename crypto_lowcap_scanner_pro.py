@@ -1,5 +1,7 @@
 import streamlit as st
 
+st.set_page_config(page_title="Crypto Low-Cap TRUE BREAKOUT PRO v6", page_icon="₿", layout="wide")
+
 # Dashboard refresh controls
 if "auto_refresh" not in st.session_state:
     st.session_state.auto_refresh = False
@@ -36,7 +38,6 @@ import ccxt
 from datetime import datetime, timezone
 from rsi_engine import multi_timeframe_rsi, weighted_rsi
 
-st.set_page_config(page_title="Crypto Low-Cap TRUE BREAKOUT PRO Scanner", page_icon="₿", layout="wide")
 
 CG = "https://api.coingecko.com/api/v3"
 ZEN_ID = "horizen"
@@ -48,16 +49,173 @@ if COINGECKO_API_KEY:
 
 @st.cache_data(ttl=300)
 def cg_markets():
-    p={"vs_currency":"usd","order":"market_cap_desc","per_page":250,"page":1,
-       "sparkline":"false","price_change_percentage":"7d,30d"}
-    r=requests.get(f"{CG}/coins/markets",params=p,timeout=30); r.raise_for_status()
-    return pd.DataFrame(r.json())
+    """CoinGecko Top 500 universe using two 250-coin pages."""
+    frames=[]
+    for page in (1, 2):
+        p={"vs_currency":"usd","order":"market_cap_desc","per_page":250,"page":page,
+           "sparkline":"false","price_change_percentage":"7d,30d"}
+        r=requests.get(f"{CG}/coins/markets",params=p,headers=CG_HEADERS,timeout=30)
+        r.raise_for_status()
+        data=r.json()
+        if data:
+            frames.append(pd.DataFrame(data))
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames,ignore_index=True).drop_duplicates("id")
 
 @st.cache_data(ttl=300)
 def cg_chart(cid, days=365):
     r=requests.get(f"{CG}/coins/{cid}/market_chart",
-                   params={"vs_currency":"usd","days":days},timeout=30)
+                   params={"vs_currency":"usd","days":days},headers=CG_HEADERS,timeout=30)
     r.raise_for_status(); return r.json()
+
+
+def cg_daily_ohlc_from_market_chart(coin_id, days=90):
+    """Build completed UTC daily OHLC from CoinGecko market-chart prices.
+
+    CoinGecko's market_chart endpoint provides price points rather than
+    candle OHLC, so each completed UTC day is reconstructed from the
+    intraday prices. This is used only as an ADX/DMI fallback; exchange
+    candles remain preferred for structure/breakout calculations.
+    """
+    payload=cg_chart(coin_id, days)
+    prices=payload.get("prices",[])
+    if not prices:
+        return pd.DataFrame()
+    q=pd.DataFrame(prices,columns=["ts","price"])
+    q["ts"]=pd.to_datetime(q["ts"],unit="ms",utc=True)
+    q["price"]=pd.to_numeric(q["price"],errors="coerce")
+    q=q.dropna().set_index("ts").sort_index()
+    d=pd.DataFrame({
+        "open":q["price"].resample("1D").first(),
+        "high":q["price"].resample("1D").max(),
+        "low":q["price"].resample("1D").min(),
+        "close":q["price"].resample("1D").last(),
+    }).dropna().reset_index(drop=True)
+    if len(d)>1:
+        d=d.iloc[:-1].copy()
+    return d
+
+
+def atr_series(high, low, close, n=14):
+    h=pd.Series(high,dtype=float); l=pd.Series(low,dtype=float); c=pd.Series(close,dtype=float)
+    prev=c.shift(1)
+    tr=pd.concat([(h-l),(h-prev).abs(),(l-prev).abs()],axis=1).max(axis=1)
+    return tr.ewm(alpha=1/n,adjust=False,min_periods=n).mean()
+
+
+def obv_series(close, volume):
+    c=pd.Series(close,dtype=float).reset_index(drop=True); v=pd.Series(volume,dtype=float).reset_index(drop=True)
+    delta=c.diff()
+    direction=np.sign(delta).fillna(0)
+    return (direction*v.fillna(0)).cumsum()
+
+
+def ema_series(values, n):
+    return pd.Series(values,dtype=float).ewm(span=n,adjust=False,min_periods=n).mean()
+
+
+def macd_metrics(close, fast=12, slow=26, signal=9):
+    c=pd.Series(close,dtype=float)
+    ef=c.ewm(span=fast,adjust=False,min_periods=fast).mean()
+    es=c.ewm(span=slow,adjust=False,min_periods=slow).mean()
+    macd=ef-es
+    sig=macd.ewm(span=signal,adjust=False,min_periods=signal).mean()
+    hist=macd-sig
+    accel=bool(len(hist.dropna())>=3 and hist.iloc[-1]>hist.iloc[-2]>hist.iloc[-3])
+    return (float(macd.iloc[-1]) if pd.notna(macd.iloc[-1]) else np.nan,
+            float(sig.iloc[-1]) if pd.notna(sig.iloc[-1]) else np.nan,
+            float(hist.iloc[-1]) if pd.notna(hist.iloc[-1]) else np.nan, accel)
+
+
+def bollinger_metrics(close, n=20, mult=2.0):
+    c=pd.Series(close,dtype=float)
+    mid=c.rolling(n,min_periods=n).mean(); std=c.rolling(n,min_periods=n).std(ddof=0)
+    upper=mid+mult*std; lower=mid-mult*std
+    width=(upper-lower)/mid.replace(0,np.nan)
+    if len(width.dropna())<6:
+        return np.nan,np.nan,False
+    current=float(width.iloc[-1]); avg20=float(width.iloc[-21:-1].mean()) if len(width)>=21 else float(width.iloc[:-1].mean())
+    expanding=pd.notna(current) and pd.notna(avg20) and current>=avg20*1.10
+    return current,avg20,bool(expanding)
+
+
+def cmf_series(high, low, close, volume, n=20):
+    h=pd.Series(high,dtype=float); l=pd.Series(low,dtype=float); c=pd.Series(close,dtype=float); v=pd.Series(volume,dtype=float)
+    rng=(h-l).replace(0,np.nan)
+    mfm=((c-l)-(h-c))/rng
+    mfv=mfm*v
+    return mfv.rolling(n,min_periods=n).sum()/v.rolling(n,min_periods=n).sum().replace(0,np.nan)
+
+
+def mfi_series(high, low, close, volume, n=14):
+    h=pd.Series(high,dtype=float); l=pd.Series(low,dtype=float); c=pd.Series(close,dtype=float); v=pd.Series(volume,dtype=float)
+    tp=(h+l+c)/3.0; flow=tp*v; delta=tp.diff()
+    pos=flow.where(delta>0,0.0).rolling(n,min_periods=n).sum()
+    neg=flow.where(delta<0,0.0).abs().rolling(n,min_periods=n).sum()
+    ratio=pos/neg.replace(0,np.nan)
+    out=100-(100/(1+ratio))
+    out=out.where(~((neg==0)&(pos>0)),100.0)
+    out=out.where(~((neg==0)&(pos==0)),50.0)
+    return out
+
+
+def acceptance_metrics(d, resistance, max_wait=10, retest_tol=0.01):
+    """Return breakout acceptance, retest-held and distance %.
+
+    Acceptance requires three completed closes above the prior resistance.
+    Retest-held requires a recent pullback near resistance followed by a
+    close back above it. This intentionally avoids intrabar-only confirmation.
+    """
+    if d is None or len(d)<3 or not pd.notna(resistance) or resistance<=0:
+        return False,False,np.nan
+    closes=pd.to_numeric(d["close"],errors="coerce").reset_index(drop=True)
+    highs=pd.to_numeric(d["high"],errors="coerce").reset_index(drop=True)
+    lows=pd.to_numeric(d["low"],errors="coerce").reset_index(drop=True)
+    distance=(float(closes.iloc[-1])-float(resistance))/float(resistance)*100
+    accepted=bool((closes.iloc[-3:]>resistance).all())
+    retest=False
+    if accepted:
+        start=max(0,len(d)-max_wait)
+        recent_low=lows.iloc[start:].min()
+        near=recent_low<=resistance*(1+retest_tol)
+        post=closes.iloc[start:]
+        retest=bool(near and (post>resistance).sum()>=2 and closes.iloc[-1]>resistance)
+    return accepted,retest,float(distance)
+
+
+def _find_contract_symbol(ex, ticker):
+    t=str(ticker).upper()
+    preferred=[f"{t}/USDT:USDT",f"{t}/USDT"]
+    for sym in preferred:
+        m=ex.markets.get(sym)
+        if m and m.get("active",True) and (m.get("swap") or m.get("contract")):
+            return sym
+    for sym,m in ex.markets.items():
+        if (str(m.get("base","")).upper()==t and str(m.get("quote","")).upper()=="USDT"
+            and m.get("active",True) and (m.get("swap") or m.get("contract"))):
+            return sym
+    return None
+
+
+def derivatives_context(ex, ticker):
+    """Optional current derivatives context. Missing derivatives never block a signal."""
+    out={"oi":np.nan,"funding":np.nan,"oi_available":False,"funding_available":False}
+    try:
+        symbol=_find_contract_symbol(ex,ticker)
+        if not symbol:
+            return out
+        if getattr(ex,"has",{}).get("fetchOpenInterest"):
+            oi=ex.fetch_open_interest(symbol)
+            val=oi.get("openInterestValue",oi.get("openInterestAmount",np.nan))
+            if pd.notna(val): out["oi"]=float(val); out["oi_available"]=True
+        if getattr(ex,"has",{}).get("fetchFundingRate"):
+            fr=ex.fetch_funding_rate(symbol)
+            val=fr.get("fundingRate",np.nan)
+            if pd.notna(val): out["funding"]=float(val); out["funding_available"]=True
+    except Exception:
+        pass
+    return out
 
 def rsi_series(x, n=14):
     """Return full Wilder-style RSI series."""
@@ -285,14 +443,14 @@ def daily_adx(coin_id,ticker=None):
 
 def true_breakout_metrics(exchange_name,ticker):
     """TRUE BREAKOUT PRO metrics: structure, volatility, volume flow, trend, momentum and acceptance."""
-    out={"daily_resistance":np.nan,"weekly_resistance":np.nan,"daily_breakout":False,"weekly_breakout":False,"volume_confirmed":False,"close_near_high":False,"atr14":np.nan,"atr20_avg":np.nan,"atr_expanding":False,"atr_breakout_distance":np.nan,"atr_distance_confirmed":False,"obv_breakout":False,"ema20":np.nan,"ema50":np.nan,"ema200":np.nan,"ema_bullish":False,"ema200_bullish":False,"bb_width":np.nan,"bb_expanding":False,"cmf20":np.nan,"cmf_bullish":False,"mfi14":np.nan,"mfi_bullish":False,"macd_hist":np.nan,"macd_accelerating":False,"breakout_accepted":False,"breakout_retest_held":False,"breakout_distance_pct":np.nan,"oi":np.nan,"funding":np.nan,"oi_available":False,"funding_available":False,"true_breakout_data":False,"breakout_exchange":None}
+    out={"daily_resistance":np.nan,"weekly_resistance":np.nan,"daily_breakout":False,"weekly_breakout":False,"volume_confirmed":False,"close_near_high":False,"atr14":np.nan,"atr20_avg":np.nan,"atr_expanding":False,"atr_breakout_distance":np.nan,"atr_distance_confirmed":False,"obv_breakout":False,"ema20":np.nan,"ema50":np.nan,"ema200":np.nan,"ema_bullish":False,"ema200_bullish":False,"bb_width":np.nan,"bb_expanding":False,"cmf20":np.nan,"cmf_bullish":False,"mfi14":np.nan,"mfi_bullish":False,"macd_hist":np.nan,"macd_accelerating":False,"breakout_accepted":False,"breakout_retest_held":False,"breakout_distance_pct":np.nan,"rvol5":np.nan,"rvol_accelerating":False,"oi":np.nan,"funding":np.nan,"oi_available":False,"funding_available":False,"true_breakout_data":False,"breakout_exchange":None,"breakout_failed":False}
     try:
         ex=getattr(ccxt,exchange_name)({"enableRateLimit":True}); ex.load_markets(); symbol=find_market_symbol(ex,ticker)
         if not symbol:return out
         rows=ex.fetch_ohlcv(symbol,timeframe='1d',limit=260)
         if len(rows)<60:return out
         d=pd.DataFrame(rows,columns=['ts','open','high','low','close','volume']); d=d.iloc[:-1].copy()
-        cur=d.iloc[-1]; prior=d.iloc[-21:-1]; res=float(prior.high.max()); avgv=float(prior.volume.mean()); rng=float(cur.high-cur.low); loc=((float(cur.close)-float(cur.low))/rng) if rng>0 else 0
+        cur=d.iloc[-1]; prior=d.iloc[-21:-1]; res=float(prior.high.max()); avgv=float(prior.volume.mean()); vol5=float(d.volume.iloc[-6:-1].mean()) if len(d)>=6 else np.nan; rvol5=float(cur.volume/vol5) if pd.notna(vol5) and vol5>0 else np.nan; rng=float(cur.high-cur.low); loc=((float(cur.close)-float(cur.low))/rng) if rng>0 else 0
         atr=atr_series(d.high,d.low,d.close,14); ac=float(atr.iloc[-1]); a20=atr.iloc[-21:-1].dropna(); aavg=float(a20.mean()) if len(a20) else np.nan; adist=(float(cur.close)-res)/ac if ac>0 else np.nan
         obv=obv_series(d.close,d.volume); op=obv.iloc[-21:-1].dropna()
         e20=float(ema_series(d.close,20).iloc[-1]); e50=float(ema_series(d.close,50).iloc[-1]); e200s=ema_series(d.close,200); e200=float(e200s.iloc[-1]) if pd.notna(e200s.iloc[-1]) else np.nan
@@ -302,20 +460,39 @@ def true_breakout_metrics(exchange_name,ticker):
             wr=ex.fetch_ohlcv(symbol,timeframe='1w',limit=30); w=pd.DataFrame(wr,columns=['ts','open','high','low','close','volume']); w=w.iloc[:-1]
             if len(w)>=21:wres=float(w.iloc[-21:-1].high.max()); wbreak=float(w.iloc[-1].close)>=wres*1.0025
         except Exception:pass
-        out.update({'daily_resistance':res,'weekly_resistance':wres,'daily_breakout':float(cur.close)>=res*1.005,'weekly_breakout':bool(wbreak),'volume_confirmed':avgv>0 and float(cur.volume)>=avgv*1.5,'close_near_high':loc>=.75,'atr14':ac,'atr20_avg':aavg,'atr_expanding':pd.notna(aavg) and ac>=aavg*1.10,'atr_breakout_distance':adist,'atr_distance_confirmed':pd.notna(adist) and adist>=.25,'obv_breakout':pd.notna(obv.iloc[-1]) and len(op)>0 and obv.iloc[-1]>op.max(),'ema20':e20,'ema50':e50,'ema200':e200,'ema_bullish':float(cur.close)>e20>e50,'ema200_bullish':pd.notna(e200) and float(cur.close)>e200,'bb_width':bbw,'bb_expanding':bbe,'cmf20':float(cmf.iloc[-1]) if pd.notna(cmf.iloc[-1]) else np.nan,'cmf_bullish':pd.notna(cmf.iloc[-1]) and cmf.iloc[-1]>0,'mfi14':float(mfi.iloc[-1]) if pd.notna(mfi.iloc[-1]) else np.nan,'mfi_bullish':pd.notna(mfi.iloc[-1]) and 50<=mfi.iloc[-1]<85,'macd_hist':mh,'macd_accelerating':bool(ma and pd.notna(mac) and pd.notna(ms) and mac>ms and mh>0),'breakout_accepted':acc,'breakout_retest_held':ret,'breakout_distance_pct':dist,'oi':der['oi'],'funding':der['funding'],'oi_available':der['oi_available'],'funding_available':der['funding_available'],'true_breakout_data':True,'breakout_exchange':exchange_name})
+        out.update({'daily_resistance':res,'weekly_resistance':wres,'daily_breakout':float(cur.close)>=res*1.005,'weekly_breakout':bool(wbreak),'volume_confirmed':avgv>0 and float(cur.volume)>=avgv*1.5,'close_near_high':loc>=.75,'atr14':ac,'atr20_avg':aavg,'atr_expanding':pd.notna(aavg) and ac>=aavg*1.10,'atr_breakout_distance':adist,'atr_distance_confirmed':pd.notna(adist) and adist>=.25,'obv_breakout':pd.notna(obv.iloc[-1]) and len(op)>0 and obv.iloc[-1]>op.max(),'ema20':e20,'ema50':e50,'ema200':e200,'ema_bullish':float(cur.close)>e20>e50,'ema200_bullish':pd.notna(e200) and float(cur.close)>e200,'bb_width':bbw,'bb_expanding':bbe,'cmf20':float(cmf.iloc[-1]) if pd.notna(cmf.iloc[-1]) else np.nan,'cmf_bullish':pd.notna(cmf.iloc[-1]) and cmf.iloc[-1]>0,'mfi14':float(mfi.iloc[-1]) if pd.notna(mfi.iloc[-1]) else np.nan,'mfi_bullish':pd.notna(mfi.iloc[-1]) and 50<=mfi.iloc[-1]<85,'macd_hist':mh,'macd_accelerating':bool(ma and pd.notna(mac) and pd.notna(ms) and mac>ms and mh>0),'breakout_accepted':acc,'breakout_retest_held':ret,'breakout_distance_pct':dist,'rvol5':rvol5,'rvol_accelerating':pd.notna(rvol5) and rvol5>=1.5 and float(cur.volume)>=avgv*1.5,'oi':der['oi'],'funding':der['funding'],'oi_available':der['oi_available'],'funding_available':der['funding_available'],'true_breakout_data':True,'breakout_exchange':exchange_name})
+        # Explicit post-breakout failure state. A close back below the
+        # prior resistance after acceptance is treated as a failed breakout.
+        recent_closes=d.close.iloc[-6:]
+        prior_breakout=bool((recent_closes.iloc[:-1] >= res*1.005).any()) if len(recent_closes)>=2 else False
+        out["breakout_failed"]=bool(prior_breakout and float(recent_closes.iloc[-1]) < res)
         return out
     except Exception:return out
 
 def breakout_confidence(m,btc_rel,vr,rs,sk,sd,av,pdi,mdi,ap):
-    score=0
-    for pts,key in [(8,'daily_breakout'),(6,'weekly_breakout'),(3,'close_near_high'),(3,'breakout_accepted'),(5,'volume_confirmed'),(5,'obv_breakout'),(3,'cmf_bullish'),(5,'atr_distance_confirmed'),(3,'atr_expanding'),(2,'bb_expanding'),(5,'ema_bullish'),(2,'ema200_bullish'),(2,'macd_accelerating'),(3,'breakout_retest_held'),(2,'mfi_bullish')]: score+=pts if m.get(key) else 0
-    score+=2 if pd.notna(vr) and vr>=10 else 0; score+=5 if pd.notna(av) and av>=25 and pd.notna(pdi) and pd.notna(mdi) and pdi>mdi else 0; score+=3 if pd.notna(ap) and pd.notna(av) and av>ap else 0
-    score+=3 if pd.notna(sk) and pd.notna(sd) and sk>sd else 0; score+=2 if pd.notna(sk) and sk>=50 else 0; score+=3 if pd.notna(rs) and 45<=rs<75 else 0
-    score+=5 if pd.notna(btc_rel) and btc_rel>=5 else 0; score+=5 if pd.notna(btc_rel) and btc_rel>=10 else 0; score+=3 if m.get('oi_available') else 0; score+=2 if m.get('funding_available') and abs(m.get('funding',0))<.0005 else 0
+    # 100-point confirmation score. Core structure/participation/trend/momentum
+    # dominate; derivatives are context rather than a gate.
+    score=0.0
+    for pts,key in [(12,'daily_breakout'),(8,'weekly_breakout'),(5,'close_near_high'),
+                    (8,'volume_confirmed'),(8,'obv_breakout'),(8,'atr_distance_confirmed'),
+                    (5,'atr_expanding'),(6,'ema_bullish'),(3,'ema200_bullish'),
+                    (5,'cmf_bullish'),(4,'mfi_bullish'),(5,'macd_accelerating'),
+                    (5,'bb_expanding'),(4,'breakout_accepted'),(7,'breakout_retest_held'),
+                    (4,'rvol_accelerating')]:
+        score += pts if m.get(key) else 0
+    if pd.notna(vr) and vr>=10: score+=3
+    if pd.notna(av) and av>=25 and pd.notna(pdi) and pd.notna(mdi) and pdi-mdi>=5: score+=4
+    if pd.notna(ap) and pd.notna(av) and av>ap: score+=3
+    if pd.notna(sk) and pd.notna(sd) and sk>sd: score+=2
+    if pd.notna(sk) and sk>=50: score+=1
+    if pd.notna(rs) and 45<=rs<75: score+=2
+    if pd.notna(btc_rel) and btc_rel>=5: score+=3
+    if pd.notna(btc_rel) and btc_rel>=10: score+=2
+    if pd.notna(m.get("btc_down_day_rel_pct")) and m.get("btc_down_day_rel_pct")>0: score+=2
     return float(min(100,score))
 
 def is_true_breakout(metrics,btc_rel_7d,volume_mcap,weighted_rsi,stoch_k,stoch_d,adx_value,plus_di,minus_di,adx_prev):
-    core=all([bool(metrics.get('daily_breakout')),bool(metrics.get('weekly_breakout')),bool(metrics.get('volume_confirmed')),bool(metrics.get('close_near_high')),bool(metrics.get('atr_distance_confirmed')),bool(metrics.get('atr_expanding')),bool(metrics.get('obv_breakout')),pd.notna(btc_rel_7d) and btc_rel_7d>=5,pd.notna(volume_mcap) and volume_mcap>=10,pd.notna(weighted_rsi) and weighted_rsi<75,pd.notna(stoch_k) and pd.notna(stoch_d) and stoch_k>stoch_d,pd.notna(stoch_k) and stoch_k>=50,pd.notna(adx_value) and adx_value>=25,pd.notna(adx_prev) and adx_value>adx_prev,pd.notna(plus_di) and pd.notna(minus_di) and plus_di>minus_di])
+    core=all([bool(metrics.get('daily_breakout')),bool(metrics.get('weekly_breakout')),bool(metrics.get('volume_confirmed')),bool(metrics.get('close_near_high')),bool(metrics.get('atr_distance_confirmed')),bool(metrics.get('atr_expanding')),bool(metrics.get('obv_breakout')),pd.notna(btc_rel_7d) and btc_rel_7d>=5,pd.notna(volume_mcap) and volume_mcap>=10,pd.notna(weighted_rsi) and weighted_rsi<75,pd.notna(stoch_k) and pd.notna(stoch_d) and stoch_k>stoch_d,pd.notna(stoch_k) and stoch_k>=50,pd.notna(adx_value) and adx_value>=25,pd.notna(adx_prev) and adx_value>adx_prev,pd.notna(plus_di) and pd.notna(minus_di) and (plus_di-minus_di)>=5])
     if pd.notna(metrics.get('ema20')) and pd.notna(metrics.get('ema50')): core=core and bool(metrics.get('ema_bullish'))
     return bool(core)
 
@@ -324,6 +501,28 @@ def signal(row):
     if row["score"]>=60:return "🟢 MOMENTUM CONFIRMED"
     if row["score"]>=45:return "🟡 WATCH / PULLBACK"
     return "🔴 WEAK"
+
+
+@st.cache_data(ttl=300)
+def downside_resilience(exchange_name,ticker):
+    """Compare a coin with BTC specifically on BTC-negative daily sessions."""
+    try:
+        ex=getattr(ccxt,exchange_name)({"enableRateLimit":True}); ex.load_markets()
+        sym=find_market_symbol(ex,ticker); btc_sym=find_market_symbol(ex,"BTC")
+        if not sym or not btc_sym:return np.nan,np.nan,np.nan
+        a=ex.fetch_ohlcv(sym,timeframe="1d",limit=60); b=ex.fetch_ohlcv(btc_sym,timeframe="1d",limit=60)
+        if len(a)<35 or len(b)<35:return np.nan,np.nan,np.nan
+        ad=pd.DataFrame(a,columns=["ts","open","high","low","close","volume"]); bd=pd.DataFrame(b,columns=["ts","open","high","low","close","volume"])
+        ad=ad.iloc[:-1].copy(); bd=bd.iloc[:-1].copy()
+        ar=ad.close.pct_change(); br=bd.close.pct_change()
+        q=pd.DataFrame({"coin":ar.values,"btc":br.values}).dropna(); q=q[q.btc<0]
+        if len(q)<5:return np.nan,np.nan,np.nan
+        beta=float(q["coin"].cov(q["btc"])/q["btc"].var()) if q["btc"].var()>0 else np.nan
+        rel=float((q["coin"]-q["btc"]).mean()*100)
+        hit=float((q["coin"]>q["btc"]).mean()*100)
+        return beta,rel,hit
+    except Exception:
+        return np.nan,np.nan,np.nan
 
 
 @st.cache_data(ttl=300)
@@ -443,7 +642,7 @@ if "run" not in st.session_state: st.session_state.run=True
 
 if run or st.session_state.run:
     try:
-        with st.spinner("Scanning CoinGecko Top 250…"):
+        with st.spinner("Scanning CoinGecko Top 500…"):
             df=cg_markets()
         df["mcap_m"]=df.market_cap/1e6
         df["vol_m"]=df.total_volume/1e6
@@ -469,12 +668,14 @@ if run or st.session_state.run:
         candidates["liq_score"]=np.clip(candidates.vr/10,0,20)
         candidates["base_score"]=candidates.vol_score+candidates.mom_score+candidates.rel_score+candidates.liq_score
 
-        top=candidates.sort_values("base_score",ascending=False).head(15).copy()
+        top15=candidates.sort_values("base_score",ascending=False).head(15).copy()
+        zen_top=candidates[candidates.id==ZEN_ID]
+        top=pd.concat([top15,zen_top],ignore_index=True).drop_duplicates("id").head(16).copy()
         st.subheader("Market scan")
         a,b,c,d=st.columns(4)
         a.metric("Candidates",len(candidates))
         b.metric("BTC 24h",f"{btc24:.2f}%")
-        b.metric("BTC 7d",f"{btc7:.2f}%")
+        c.metric("BTC 7d",f"{btc7:.2f}%")
         c.metric("Exchange",exchange.upper())
         d.metric("Updated",datetime.now(timezone.utc).strftime("%H:%M UTC"))
 
@@ -593,7 +794,7 @@ if run or st.session_state.run:
 
             # ADX/DMI: 10 points. Reward a strong, rising bullish trend;
             # do not reward high ADX by itself because ADX has no direction.
-            adx_value, plus_di, minus_di, adx_prev = daily_adx(str(x["id"]), str(x["symbol"]).upper())
+            adx_value, plus_di, minus_di, adx_prev, adx_source = daily_adx_with_source(str(x["id"]), str(x["symbol"]).upper())
             if pd.isna(adx_value):
                 adx_component = 0.0
             else:
@@ -607,11 +808,12 @@ if run or st.session_state.run:
             score = min(100,max(0,raw*regime_adj))
 
             # TRUE BREAKOUT PRO confirmation and extension control.
-            bm=true_breakout_metrics(exchange,str(x["symbol"]).upper()); stoch_k,stoch_d,stoch_source=daily_stochrsi_with_source(str(x["id"]), str(x["symbol"]).upper())
+            bm=true_breakout_metrics(exchange,str(x["symbol"]).upper()); down_beta,down_rel,down_hit=downside_resilience(exchange,str(x["symbol"]).upper()); bm["downside_beta"]=down_beta; bm["btc_down_day_rel_pct"]=down_rel; bm["btc_down_day_outperform_pct"]=down_hit; stoch_k,stoch_d,stoch_source=daily_stochrsi_with_source(str(x["id"]), str(x["symbol"]).upper())
             confidence=breakout_confidence(bm,x["btc_rel_7d"],x["vr"],rs,stoch_k,stoch_d,adx_value,plus_di,minus_di,adx_prev)
             true_break=is_true_breakout(bm,x["btc_rel_7d"],x["vr"],rs,stoch_k,stoch_d,adx_value,plus_di,minus_di,adx_prev)
             extended=bool((pd.notna(rs) and rs>=80) or (pd.notna(bm.get("breakout_distance_pct")) and bm["breakout_distance_pct"]>2))
-            if true_break and confidence>=90 and not extended: status="🚀 HIGH-CONVICTION TRUE BREAKOUT"
+            if bm.get("breakout_failed"): status="🚨 BREAKOUT FAILED"
+            elif true_break and confidence>=90 and not extended: status="🚀 HIGH-CONVICTION TRUE BREAKOUT"
             elif true_break and extended: status="🚀 TRUE BREAKOUT — EXTENDED / WAIT FOR RETEST"
             elif true_break: status="🟢 TRUE BREAKOUT"
             elif confidence>=80: status="🟢 BREAKOUT CONFIRMED"
@@ -623,16 +825,18 @@ if run or st.session_state.run:
             elif score>=45: status="🟡 WATCH / PULLBACK"
             else: status="🔴 WEAK"
 
-            final.append([x["name"],x["symbol"].upper(),round(score,1),status,round(confidence,1),round(rs,1),round(x["btc_rel_7d"],1),round(x["vr"],1),round(x["price_change_percentage_24h"],1),bm.get("daily_breakout",False),bm.get("weekly_breakout",False),bm.get("volume_confirmed",False),bm.get("close_near_high",False),bm.get("atr14",np.nan),bm.get("atr_breakout_distance",np.nan),bm.get("atr_expanding",False),bm.get("obv_breakout",False),bm.get("ema20",np.nan),bm.get("ema50",np.nan),bm.get("ema200",np.nan),bm.get("ema_bullish",False),bm.get("ema200_bullish",False),bm.get("bb_width",np.nan),bm.get("bb_expanding",False),bm.get("cmf20",np.nan),bm.get("cmf_bullish",False),bm.get("mfi14",np.nan),bm.get("mfi_bullish",False),bm.get("macd_hist",np.nan),bm.get("macd_accelerating",False),bm.get("breakout_accepted",False),bm.get("breakout_retest_held",False),bm.get("breakout_distance_pct",np.nan),bm.get("oi",np.nan),bm.get("funding",np.nan),stoch_k,stoch_d,adx_value,plus_di,minus_di,(adx_value>adx_prev if pd.notna(adx_value) and pd.notna(adx_prev) else False),f"StochRSI: {stoch_source} | ADX/DMI: {adx_source}"])
+            final.append([x["name"],x["symbol"].upper(),round(score,1),status,round(confidence,1),round(rs,1),round(x["btc_rel_7d"],1),round(x["vr"],1),round(x["price_change_percentage_24h"],1),bm.get("daily_breakout",False),bm.get("weekly_breakout",False),bm.get("volume_confirmed",False),bm.get("close_near_high",False),bm.get("atr14",np.nan),bm.get("atr_breakout_distance",np.nan),bm.get("atr_expanding",False),bm.get("obv_breakout",False),bm.get("ema20",np.nan),bm.get("ema50",np.nan),bm.get("ema200",np.nan),bm.get("ema_bullish",False),bm.get("ema200_bullish",False),bm.get("bb_width",np.nan),bm.get("bb_expanding",False),bm.get("cmf20",np.nan),bm.get("cmf_bullish",False),bm.get("mfi14",np.nan),bm.get("mfi_bullish",False),bm.get("macd_hist",np.nan),bm.get("macd_accelerating",False),bm.get("breakout_accepted",False),bm.get("breakout_retest_held",False),bm.get("breakout_distance_pct",np.nan),bm.get("rvol5",np.nan),bm.get("rvol_accelerating",False),bm.get("breakout_failed",False),bm.get("downside_beta",np.nan),bm.get("btc_down_day_rel_pct",np.nan),bm.get("btc_down_day_outperform_pct",np.nan),bm.get("oi",np.nan),bm.get("funding",np.nan),stoch_k,stoch_d,adx_value,plus_di,minus_di,(adx_value>adx_prev if pd.notna(adx_value) and pd.notna(adx_prev) else False),f"StochRSI: {stoch_source} | ADX/DMI: {adx_source}"])
 
-        finaldf=pd.DataFrame(final,columns=["Coin","Ticker","Score","Signal","Breakout confidence","Weighted RSI","BTC-rel 7d %","Vol/MCap %","24h %","Daily breakout","Weekly breakout","Volume confirmed","Close near high","ATR-14","Breakout / ATR","ATR expanding","OBV breakout","EMA20","EMA50","EMA200","EMA bullish","Above EMA200","BB width","BB expanding","CMF20","CMF bullish","MFI14","MFI bullish","MACD histogram","MACD accelerating","Breakout accepted","Retest held","Breakout distance %","Open interest","Funding rate","StochRSI %K","StochRSI %D","ADX-14","+DI","-DI","ADX rising","Data Source"])
+        finaldf=pd.DataFrame(final,columns=["Coin","Ticker","Score","Signal","Breakout confidence","Weighted RSI","BTC-rel 7d %","Vol/MCap %","24h %","Daily breakout","Weekly breakout","Volume confirmed","Close near high","ATR-14","Breakout / ATR","ATR expanding","OBV breakout","EMA20","EMA50","EMA200","EMA bullish","Above EMA200","BB width","BB expanding","CMF20","CMF bullish","MFI14","MFI bullish","MACD histogram","MACD accelerating","Breakout accepted","Retest held","Breakout distance %","RVOL 5D","RVOL accelerating","Breakout failed","Downside beta","BTC-down-day rel %","BTC-down-day outperform %","Open interest","Funding rate","StochRSI %K","StochRSI %D","ADX-14","+DI","-DI","ADX rising","Data Source"])
         finaldf=finaldf.sort_values("Score",ascending=False)
         st.dataframe(finaldf,use_container_width=True,hide_index=True)
         st.caption("TRUE BREAKOUT PRO: structure + volume/OBV + ATR + EMA + volatility + money flow + MACD + acceptance/retest + optional derivatives.")
 
         st.subheader("Scanner rules")
         st.markdown("""
-        **TRUE BREAKOUT CORE:** 20-day + 20-week breakout, volume ≥1.5× prior 20-day average, close in top 25%, breakout ≥0.25 ATR-14, ATR expanding ≥10%, OBV new 20-day high, BTC-relative 7D ≥+5pp, volume/MCap ≥10%, weighted RSI <75%, bullish StochRSI, ADX-14 ≥25 and rising, +DI > -DI, and EMA20 > EMA50 when available.
+        **TRUE BREAKOUT CORE:** 20-day + 20-week breakout, volume ≥1.5× prior 20-day average, close in top 25%, breakout ≥0.25 ATR-14, ATR expanding ≥10%, OBV new 20-day high, BTC-relative 7D ≥+5pp, volume/MCap ≥10%, weighted RSI <75%, bullish StochRSI, ADX-14 ≥25 and rising, +DI−DI ≥5, and EMA20 > EMA50 when available.
+
+**FAILURE CONTROL:** a post-breakout close back below resistance is labelled **🚨 BREAKOUT FAILED**. Retest-held confirmation is tracked separately rather than treating every initial breakout as fully confirmed.
 
         **CONFIDENCE 0–100:** adds EMA200, Bollinger expansion, CMF, MFI, MACD acceleration, breakout acceptance/retest, stronger BTC-relative strength, optional open interest and funding.
 
