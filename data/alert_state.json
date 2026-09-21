@@ -2,61 +2,61 @@
   {
     "id": "sonic-3",
     "ticker": "S",
-    "score": 86.3,
+    "score": 87.2,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "optimism",
     "ticker": "OP",
-    "score": 86.0,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "plasma",
-    "ticker": "XPL",
-    "score": 85.1,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "starknet",
-    "ticker": "STRK",
-    "score": 84.9,
+    "score": 85.5,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "sei-network",
     "ticker": "SEI",
-    "score": 84.7,
+    "score": 85.3,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
   },
   {
-    "id": "kamino",
-    "ticker": "KMNO",
-    "score": 84.3,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+    "id": "plasma",
+    "ticker": "XPL",
+    "score": 84.9,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "arweave",
     "ticker": "AR",
-    "score": 84.3,
+    "score": 84.6,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "fetch-ai",
     "ticker": "FET",
-    "score": 83.3,
+    "score": 84.5,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
   },
   {
     "id": "zencash",
     "ticker": "ZEN",
-    "score": 82.2,
+    "score": 84.0,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "kamino",
+    "ticker": "KMNO",
+    "score": 83.3,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+  },
+  {
+    "id": "dogwifcoin",
+    "ticker": "WIF",
+    "score": 82.9,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   },
   {
     "id": "mina-protocol",
     "ticker": "MINA",
-    "score": 81.2,
+    "score": 82.1,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
