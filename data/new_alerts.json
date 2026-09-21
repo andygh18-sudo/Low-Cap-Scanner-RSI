@@ -1,26 +1,20 @@
 [
   {
-    "id": "zama",
-    "ticker": "ZAMA",
-    "score": 82.3,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+    "id": "fetch-ai",
+    "ticker": "FET",
+    "score": 86.2,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "bonk",
     "ticker": "BONK",
-    "score": 82.0,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "thorchain",
-    "ticker": "RUNE",
-    "score": 81.5,
+    "score": 84.1,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
-    "id": "dgrid-ai",
-    "ticker": "DGAI",
-    "score": 80.4,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+    "id": "optimism",
+    "ticker": "OP",
+    "score": 82.5,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
