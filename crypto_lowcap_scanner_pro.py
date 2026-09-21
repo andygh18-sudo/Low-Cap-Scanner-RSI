@@ -211,106 +211,104 @@ def daily_adx(coin_id):
         return np.nan, np.nan, np.nan, np.nan
 
 
+def atr_series(high, low, close, n=14):
+    """Return Wilder-style ATR series."""
+    h=pd.Series(high,dtype=float).reset_index(drop=True)
+    l=pd.Series(low,dtype=float).reset_index(drop=True)
+    c=pd.Series(close,dtype=float).reset_index(drop=True)
+    tr=pd.concat([h-l,(h-c.shift(1)).abs(),(l-c.shift(1)).abs()],axis=1).max(axis=1)
+    return tr.ewm(alpha=1/n,adjust=False,min_periods=n).mean()
+
+
+def obv_series(close, volume):
+    """Return cumulative On-Balance Volume."""
+    c=pd.Series(close,dtype=float).reset_index(drop=True)
+    v=pd.Series(volume,dtype=float).fillna(0).reset_index(drop=True)
+    return (np.sign(c.diff()).fillna(0)*v).cumsum()
+
+
 @st.cache_data(ttl=300)
 def true_breakout_metrics(exchange_name, ticker):
-    """
-    Detect a structural TRUE BREAKOUT using public OHLCV candles.
-
-    Daily confirmation:
-      - close >= previous 20-day high * 1.005
-      - current volume >= 1.5x previous 20-day average volume
-      - close is in the top 25% of the candle range
-
-    Weekly confirmation:
-      - weekly close >= previous 20-week high * 1.0025
-
-    Market confirmation is added by the caller:
-      - BTC-relative 7D >= +5 percentage points
-      - volume/market-cap >= 10%
-      - weighted RSI < 75
-
-    Returns metrics even when the final TRUE BREAKOUT condition is false.
-    """
-    out = {
-        "daily_resistance": np.nan, "weekly_resistance": np.nan,
-        "daily_breakout": False, "weekly_breakout": False,
-        "volume_confirmed": False, "close_near_high": False,
-        "true_breakout_data": False, "breakout_exchange": None,
-    }
+    """Structural TRUE BREAKOUT metrics including ATR-14 and OBV breakout."""
+    out={"daily_resistance":np.nan,"weekly_resistance":np.nan,
+         "daily_breakout":False,"weekly_breakout":False,"volume_confirmed":False,
+         "close_near_high":False,"atr14":np.nan,"atr20_avg":np.nan,
+         "atr_expanding":False,"atr_breakout_distance":np.nan,
+         "atr_distance_confirmed":False,"obv":np.nan,"obv_resistance":np.nan,
+         "obv_breakout":False,"true_breakout_data":False,"breakout_exchange":None}
     try:
-        ex = getattr(ccxt, exchange_name)({"enableRateLimit": True})
-        ex.load_markets()
-        symbol = find_market_symbol(ex, ticker)
-        if not symbol:
-            return out
+        ex=getattr(ccxt,exchange_name)({"enableRateLimit":True}); ex.load_markets()
+        symbol=find_market_symbol(ex,ticker)
+        if not symbol:return out
+        daily=ex.fetch_ohlcv(symbol,timeframe="1d",limit=100)
+        if len(daily)<40:return out
+        d=pd.DataFrame(daily,columns=["ts","open","high","low","close","volume"])
+        d=d.iloc[:-1].copy() if len(d)>1 else d
+        if len(d)<40:return out
+        current=d.iloc[-1]; prior20=d.iloc[-21:-1]
+        resistance=float(prior20["high"].max())
+        avg_volume=float(prior20["volume"].mean())
+        candle_range=float(current["high"]-current["low"])
+        close_location=((float(current["close"])-float(current["low"]))/candle_range) if candle_range>0 else 0
+        daily_breakout=float(current["close"])>=resistance*1.005
+        volume_confirmed=avg_volume>0 and float(current["volume"])>=avg_volume*1.5
+        close_near_high=close_location>=0.75
 
-        daily = ex.fetch_ohlcv(symbol, timeframe="1d", limit=80)
-        if len(daily) < 25:
-            return out
+        atr=atr_series(d["high"],d["low"],d["close"],14)
+        atr_current=float(atr.iloc[-1]) if pd.notna(atr.iloc[-1]) else np.nan
+        atr_prior20=atr.iloc[-21:-1].dropna()
+        atr20_avg=float(atr_prior20.mean()) if not atr_prior20.empty else np.nan
+        atr_expanding=pd.notna(atr_current) and pd.notna(atr20_avg) and atr_current>=atr20_avg*1.10
+        atr_breakout_distance=((float(current["close"])-resistance)/atr_current
+                               if pd.notna(atr_current) and atr_current>0 else np.nan)
+        atr_distance_confirmed=pd.notna(atr_breakout_distance) and atr_breakout_distance>=0.25
 
-        d = pd.DataFrame(daily, columns=["ts","open","high","low","close","volume"])
-        # Ignore the currently forming candle.
-        d = d.iloc[:-1].copy() if len(d) > 1 else d
-        if len(d) < 25:
-            return out
+        obv=obv_series(d["close"],d["volume"])
+        obv_current=float(obv.iloc[-1]) if pd.notna(obv.iloc[-1]) else np.nan
+        obv_prior20=obv.iloc[-21:-1].dropna()
+        obv_resistance=float(obv_prior20.max()) if not obv_prior20.empty else np.nan
+        obv_breakout=pd.notna(obv_current) and pd.notna(obv_resistance) and obv_current>obv_resistance
 
-        current = d.iloc[-1]
-        prior20 = d.iloc[-21:-1]
-        resistance = float(prior20["high"].max())
-        avg_volume = float(prior20["volume"].mean())
-        candle_range = float(current["high"] - current["low"])
-        close_location = ((float(current["close"]) - float(current["low"])) / candle_range) if candle_range > 0 else 0
-
-        daily_breakout = float(current["close"]) >= resistance * 1.005
-        volume_confirmed = avg_volume > 0 and float(current["volume"]) >= avg_volume * 1.5
-        close_near_high = close_location >= 0.75
-
-        out.update({
-            "daily_resistance": resistance,
-            "daily_breakout": bool(daily_breakout),
-            "volume_confirmed": bool(volume_confirmed),
-            "close_near_high": bool(close_near_high),
-            "breakout_exchange": exchange_name,
-        })
-
-        # Weekly structural confirmation. 80 daily candles can yield ~11 weeks,
-        # so fetch weekly directly when the exchange supports it.
+        out.update({"daily_resistance":resistance,"daily_breakout":bool(daily_breakout),
+                    "volume_confirmed":bool(volume_confirmed),"close_near_high":bool(close_near_high),
+                    "atr14":atr_current,"atr20_avg":atr20_avg,"atr_expanding":bool(atr_expanding),
+                    "atr_breakout_distance":atr_breakout_distance,
+                    "atr_distance_confirmed":bool(atr_distance_confirmed),
+                    "obv":obv_current,"obv_resistance":obv_resistance,
+                    "obv_breakout":bool(obv_breakout),"breakout_exchange":exchange_name})
         try:
-            weekly = ex.fetch_ohlcv(symbol, timeframe="1w", limit=30)
-            if len(weekly) >= 21:
-                w = pd.DataFrame(weekly, columns=["ts","open","high","low","close","volume"])
-                w = w.iloc[:-1].copy() if len(w) > 1 else w
-                if len(w) >= 21:
-                    wc = w.iloc[-1]
-                    wprior = w.iloc[-21:-1]
-                    wres = float(wprior["high"].max())
-                    wbreak = float(wc["close"]) >= wres * 1.0025
-                    out["weekly_resistance"] = wres
-                    out["weekly_breakout"] = bool(wbreak)
-        except Exception:
-            pass
+            weekly=ex.fetch_ohlcv(symbol,timeframe="1w",limit=30)
+            if len(weekly)>=21:
+                w=pd.DataFrame(weekly,columns=["ts","open","high","low","close","volume"])
+                w=w.iloc[:-1].copy() if len(w)>1 else w
+                if len(w)>=21:
+                    wc=w.iloc[-1]; wprior=w.iloc[-21:-1]; wres=float(wprior["high"].max())
+                    out["weekly_resistance"]=wres
+                    out["weekly_breakout"]=bool(float(wc["close"])>=wres*1.0025)
+        except Exception: pass
+        return out
+    except Exception:return out
 
-        return out
-    except Exception:
-        return out
 
 
 def is_true_breakout(metrics, btc_rel_7d, volume_mcap, weighted_rsi, stoch_k, stoch_d, adx_value, plus_di, minus_di, adx_prev):
-    """Final TRUE BREAKOUT gate."""
+    """Final TRUE BREAKOUT gate; ATR-14 and OBV are mandatory confirmations."""
     return all([
-        bool(metrics.get("daily_breakout")),
-        bool(metrics.get("weekly_breakout")),
-        bool(metrics.get("volume_confirmed")),
-        bool(metrics.get("close_near_high")),
-        pd.notna(btc_rel_7d) and float(btc_rel_7d) >= 5.0,
-        pd.notna(volume_mcap) and float(volume_mcap) >= 10.0,
-        pd.notna(weighted_rsi) and float(weighted_rsi) < 75.0,
-        pd.notna(stoch_k) and pd.notna(stoch_d) and float(stoch_k) > float(stoch_d),
-        pd.notna(stoch_k) and float(stoch_k) >= 50.0,
-        pd.notna(adx_value) and float(adx_value) >= 25.0,
-        pd.notna(adx_prev) and float(adx_value) > float(adx_prev),
-        pd.notna(plus_di) and pd.notna(minus_di) and float(plus_di) > float(minus_di),
+        bool(metrics.get("daily_breakout")), bool(metrics.get("weekly_breakout")),
+        bool(metrics.get("volume_confirmed")), bool(metrics.get("close_near_high")),
+        bool(metrics.get("atr_distance_confirmed")), bool(metrics.get("atr_expanding")),
+        bool(metrics.get("obv_breakout")),
+        pd.notna(btc_rel_7d) and float(btc_rel_7d)>=5.0,
+        pd.notna(volume_mcap) and float(volume_mcap)>=10.0,
+        pd.notna(weighted_rsi) and float(weighted_rsi)<75.0,
+        pd.notna(stoch_k) and pd.notna(stoch_d) and float(stoch_k)>float(stoch_d),
+        pd.notna(stoch_k) and float(stoch_k)>=50.0,
+        pd.notna(adx_value) and float(adx_value)>=25.0,
+        pd.notna(adx_prev) and float(adx_value)>float(adx_prev),
+        pd.notna(plus_di) and pd.notna(minus_di) and float(plus_di)>float(minus_di),
     ])
+
+
 
 def signal(row):
     if row["score"]>=75:return "🟢 BREAKOUT CONFIRMATION"
@@ -624,22 +622,29 @@ if run or st.session_state.run:
                           round(x["price_change_percentage_24h"],1),
                           bm.get("daily_breakout",False), bm.get("weekly_breakout",False),
                           bm.get("volume_confirmed",False), bm.get("close_near_high",False),
-                          bm.get("daily_resistance",np.nan), bm.get("weekly_resistance",np.nan),
-                          stoch_k, stoch_d, adx_value, plus_di, minus_di, (adx_value > adx_prev if pd.notna(adx_value) and pd.notna(adx_prev) else False), "CoinGecko"])
+                           bm.get("daily_resistance",np.nan), bm.get("weekly_resistance",np.nan),
+                           bm.get("atr14",np.nan), bm.get("atr_breakout_distance",np.nan),
+                           bm.get("atr_expanding",False), bm.get("atr_distance_confirmed",False),
+                           bm.get("obv_breakout",False),
+                           stoch_k, stoch_d, adx_value, plus_di, minus_di,
+                           (adx_value > adx_prev if pd.notna(adx_value) and pd.notna(adx_prev) else False), "CoinGecko"])
 
         finaldf=pd.DataFrame(final,columns=["Coin","Ticker","Score","Signal","Weighted RSI","BTC-rel 7d %","Vol/MCap %","24h %",
                                              "Daily breakout","Weekly breakout","Volume confirmed","Close near high",
-                                             "Daily resistance","Weekly resistance","StochRSI %K","StochRSI %D",
+                                             "Daily resistance","Weekly resistance","ATR-14","Breakout / ATR",
+                                             "ATR expanding","ATR distance confirmed","OBV breakout",
+                                             "StochRSI %K","StochRSI %D",
                                              "ADX-14","+DI","-DI","ADX rising","Data Source"])
         finaldf=finaldf.sort_values("Score",ascending=False)
         st.dataframe(finaldf,use_container_width=True,hide_index=True)
+        st.caption("ATR-14: close must clear resistance by ≥0.25 ATR and ATR-14 must be ≥1.10× its prior 20-day average. OBV: current OBV must make a new high versus the preceding 20 completed days.")
 
         st.subheader("Scanner rules")
         st.markdown("""
         **Score components:** multi-timeframe RSI (20) + trend/momentum (10) + BTC-relative strength (10) +
         volume confirmation (15) + liquidity (5) + ADX/DMI trend confirmation (10) + base quality (30), then adjusted by the market regime.
 
-        **🚀 TRUE BREAKOUT:** closed above the previous 20-day high by at least 0.5% AND above the previous 20-week high by at least 0.25%, with daily volume at least 1.5× the prior 20-day average, the breakout candle closing in its top 25%, BTC-relative 7D strength ≥ +5 percentage points, volume/market-cap ≥ 10%, weighted RSI < 75%, daily StochRSI %K ≥ 50 with %K > %D, **ADX-14 ≥ 25 and rising, and +DI > -DI**. ADX measures trend strength while +DI/-DI provide direction; a high ADX alone is not treated as bullish.
+        **🚀 TRUE BREAKOUT:** closed above the previous 20-day high by at least 0.5% AND above the previous 20-week high by at least 0.25%, with daily volume at least 1.5× the prior 20-day average, the breakout candle closing in its top 25%, **close clearing resistance by at least 0.25× ATR-14, ATR-14 at least 10% above its prior 20-day average, and OBV making a new 20-day high**, BTC-relative 7D strength ≥ +5 percentage points, volume/market-cap ≥ 10%, weighted RSI < 75%, daily StochRSI %K ≥ 50 with %K > %D, **ADX-14 ≥ 25 and rising, and +DI > -DI**. ATR normalises breakout distance to current volatility; OBV checks that volume flow confirms the price breakout.
 
         **Important:** this is a ranking/filtering engine, not a prediction or buy/sell system.
         A high score means several measured conditions are aligned; it does not guarantee future performance.
