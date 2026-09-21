@@ -1,62 +1,62 @@
 [
   {
-    "id": "sonic-3",
-    "ticker": "S",
-    "score": 87.5,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "sei-network",
-    "ticker": "SEI",
-    "score": 86.5,
-    "signal": "\ud83d\ude80 TRUE BREAKOUT"
-  },
-  {
-    "id": "fetch-ai",
-    "ticker": "FET",
-    "score": 86.4,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
     "id": "dogwifcoin",
     "ticker": "WIF",
-    "score": 85.9,
+    "score": 86.6,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
   },
   {
-    "id": "fartcoin",
-    "ticker": "FARTCOIN",
-    "score": 84.8,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "bonk",
-    "ticker": "BONK",
-    "score": 84.2,
-    "signal": "\ud83d\ude80 TRUE BREAKOUT"
-  },
-  {
-    "id": "kamino",
-    "ticker": "KMNO",
-    "score": 83.0,
+    "id": "sonic-3",
+    "ticker": "S",
+    "score": 86.6,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "mina-protocol",
     "ticker": "MINA",
-    "score": 82.3,
+    "score": 84.1,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "fartcoin",
+    "ticker": "FARTCOIN",
+    "score": 83.7,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "fetch-ai",
+    "ticker": "FET",
+    "score": 83.5,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+  },
+  {
+    "id": "kamino",
+    "ticker": "KMNO",
+    "score": 82.9,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "bonk",
+    "ticker": "BONK",
+    "score": 82.3,
+    "signal": "\ud83d\ude80 TRUE BREAKOUT"
+  },
+  {
+    "id": "zama",
+    "ticker": "ZAMA",
+    "score": 81.9,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   },
   {
     "id": "plasma",
     "ticker": "XPL",
-    "score": 81.9,
+    "score": 81.2,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
-    "id": "dgrid-ai",
-    "ticker": "DGAI",
-    "score": 81.7,
+    "id": "thorchain",
+    "ticker": "RUNE",
+    "score": 80.5,
     "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   }
 ]
