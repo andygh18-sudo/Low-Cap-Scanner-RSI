@@ -562,20 +562,14 @@ def _rsi_from_close(close, period=14):
 
 
 def _exchange_mtf_rsi_fallback(ex, symbol):
-    """Build missing MTF RSI values from the same cached exchange candle architecture.
-
-    The fallback deliberately returns only timeframes for which enough completed
-    candles exist. Missing long-term RSI is represented by NaN rather than None.
-    """
+    """Build MTF RSI from exchange candles when available."""
     out = {}
     try:
-        # Intraday values.
         for tf, limit in (("1h", 120), ("4h", 120)):
             d = _completed_ohlcv(ex, symbol, tf, limit)
             if len(d) >= 30:
                 out["1H" if tf == "1h" else "4H"] = _rsi_from_close(d["close"])
 
-        # Daily and weekly values.
         d = _completed_ohlcv(ex, symbol, "1d", 420)
         if len(d) >= 30:
             out["1D"] = _rsi_from_close(d["close"])
@@ -583,9 +577,6 @@ def _exchange_mtf_rsi_fallback(ex, symbol):
         w = _completed_ohlcv(ex, symbol, "1w", 150)
         if len(w) >= 30:
             out["1W"] = _rsi_from_close(w["close"])
-
-            # Aggregate completed weekly closes into calendar-month/quarter closes.
-            # This avoids relying on exchange-specific 1M/3M timeframe support.
             ww = w.copy()
             ww["dt"] = pd.to_datetime(ww["ts"], unit="ms", utc=True)
             ww = ww.set_index("dt")
@@ -597,7 +588,52 @@ def _exchange_mtf_rsi_fallback(ex, symbol):
                 out["3M"] = _rsi_from_close(quarterly)
     except Exception:
         pass
-    return {k: v for k, v in out.items() if pd.notna(v)}
+    return {k: float(v) for k, v in out.items() if pd.notna(v) and np.isfinite(float(v))}
+
+
+def _coingecko_mtf_rsi_fallback(coin_id):
+    """Guaranteed MTF RSI fallback from CoinGecko price history.
+
+    This path is deliberately independent of exchange symbol availability.
+    It guarantees that the weighted RSI can still be calculated when a coin is
+    not listed on the selected candle exchange. Intraday RSI is omitted when
+    CoinGecko does not provide suitable intraday history; the weighted score
+    automatically re-normalizes the remaining valid timeframe weights.
+    """
+    out = {}
+    try:
+        # Three years gives enough daily history to construct daily/weekly/monthly/quarterly RSI.
+        payload = cg_chart(coin_id, 1095)
+        prices = payload.get("prices", []) if isinstance(payload, dict) else []
+        if not prices:
+            return out
+        q = pd.DataFrame(prices, columns=["ts", "price"])
+        q["dt"] = pd.to_datetime(q["ts"], unit="ms", utc=True)
+        q["price"] = pd.to_numeric(q["price"], errors="coerce")
+        q = q.dropna(subset=["dt", "price"]).sort_values("dt").set_index("dt")
+        if q.empty:
+            return out
+
+        daily = q["price"].resample("1D").last().dropna()
+        if len(daily) > 1:
+            daily = daily.iloc[:-1]
+        if len(daily) >= 30:
+            out["1D"] = _rsi_from_close(daily)
+
+        weekly = daily.resample("W-SUN").last().dropna()
+        if len(weekly) >= 30:
+            out["1W"] = _rsi_from_close(weekly)
+
+        monthly = daily.resample("ME").last().dropna()
+        if len(monthly) >= 15:
+            out["1M"] = _rsi_from_close(monthly)
+
+        quarterly = daily.resample("QE").last().dropna()
+        if len(quarterly) >= 15:
+            out["3M"] = _rsi_from_close(quarterly)
+    except Exception:
+        pass
+    return {k: float(v) for k, v in out.items() if pd.notna(v) and np.isfinite(float(v))}
 
 
 def _mtf_rsi_cached(ticker, ex=None, symbol=None):
@@ -613,14 +649,22 @@ def _mtf_rsi_cached(ticker, ex=None, symbol=None):
     except Exception:
         vals = {}
 
-    # If rsi_engine returned None/partial/invalid data, fill missing timeframes
-    # from the same exchange candle cache used by the rest of v8.
+    # Fill missing timeframes from exchange candles first.
     if ex is not None and symbol:
         missing = {"1H", "4H", "1D", "1W", "1M", "3M"} - set(vals)
         if missing:
             fallback = _exchange_mtf_rsi_fallback(ex, symbol)
             for tf, value in fallback.items():
                 vals.setdefault(tf, value)
+
+    # Critical fallback: exchange listings are not universal. If the selected
+    # exchange has no symbol for a candidate, use CoinGecko price history so
+    # Weighted RSI is still available from valid longer timeframes.
+    missing = {"1D", "1W", "1M", "3M"} - set(vals)
+    if missing:
+        fallback = _coingecko_mtf_rsi_fallback(key)
+        for tf, value in fallback.items():
+            vals.setdefault(tf, value)
 
     _ANALYSIS_CACHE[cache_key] = dict(vals)
     return dict(vals)
@@ -1092,6 +1136,14 @@ if run or st.session_state.run:
             row["Overbought"]=sum(pd.notna(v) and v>70 for v in vals.values())>=3
             rows.append(row)
         heat=pd.DataFrame(rows)
+        # Never expose Python None/NaN as the Weighted RSI value. If a coin has
+        # at least one valid timeframe, recompute directly from the displayed
+        # RSI dictionary; otherwise show N/A explicitly.
+        if not heat.empty:
+            heat["Weighted RSI"] = heat.apply(
+                lambda r: weighted_rsi_from_values({tf: r.get(tf, np.nan) for tf in ["1H","4H","1D","1W","1M","3M"]}),
+                axis=1
+            )
         st.subheader("Multi-timeframe RSI heatmap — cached")
         st.dataframe(heat.round(1),use_container_width=True,hide_index=True)
 
