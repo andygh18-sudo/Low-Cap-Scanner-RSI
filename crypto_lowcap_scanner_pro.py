@@ -260,82 +260,48 @@ def adx_dmi(high, low, close, n=14):
             float(adx.iloc[-2]))
 
 @st.cache_data(ttl=300)
-def daily_adx(coin_id):
-    """Daily ADX-14/DMI calculated entirely from CoinGecko data with a history buffer."""
+def _valid_daily_ohlc_for_adx(d):
+    """Validate completed daily OHLC data before ADX/DMI calculation."""
+    if d is None or d.empty or not {"high","low","close"}.issubset(d.columns): return False
+    z=d[["high","low","close"]].apply(pd.to_numeric,errors="coerce").dropna()
+    if len(z)<35: return False
+    return bool((z["high"]>=z["low"]).all() and (z>0).all().all())
+
+
+def _exchange_daily_ohlc(exchange_name,ticker,limit=120):
+    """Fetch completed daily OHLCV from an exchange as an ADX fallback."""
     try:
-        # ADX-14 needs at least 30 completed daily candles in adx_dmi().
-        # Request a much larger CoinGecko OHLC window so that removing the
-        # currently forming day still leaves enough observations.
-        d=cg_ohlc_daily(coin_id, 90)
-        if len(d) < 35:
-            return np.nan, np.nan, np.nan, np.nan
-        return adx_dmi(d["high"], d["low"], d["close"], 14)
+        ex=getattr(ccxt,exchange_name)({"enableRateLimit":True}); ex.load_markets()
+        symbol=find_market_symbol(ex,ticker)
+        if not symbol: return pd.DataFrame()
+        rows=ex.fetch_ohlcv(symbol,timeframe="1d",limit=limit)
+        if not rows: return pd.DataFrame()
+        d=pd.DataFrame(rows,columns=["ts","open","high","low","close","volume"])
+        return (d.iloc[:-1].copy() if len(d)>1 else d).reset_index(drop=True)
     except Exception:
-        return np.nan, np.nan, np.nan, np.nan
-
-
-def atr_series(high, low, close, n=14):
-    """Return Wilder-style ATR series."""
-    h=pd.Series(high,dtype=float).reset_index(drop=True)
-    l=pd.Series(low,dtype=float).reset_index(drop=True)
-    c=pd.Series(close,dtype=float).reset_index(drop=True)
-    tr=pd.concat([h-l,(h-c.shift(1)).abs(),(l-c.shift(1)).abs()],axis=1).max(axis=1)
-    return tr.ewm(alpha=1/n,adjust=False,min_periods=n).mean()
-
-
-def obv_series(close, volume):
-    """Return cumulative On-Balance Volume."""
-    c=pd.Series(close,dtype=float).reset_index(drop=True)
-    v=pd.Series(volume,dtype=float).fillna(0).reset_index(drop=True)
-    return (np.sign(c.diff()).fillna(0)*v).cumsum()
-
-
-def ema_series(values,n):
-    return pd.Series(values,dtype=float).reset_index(drop=True).ewm(span=n,adjust=False,min_periods=n).mean()
-
-def macd_metrics(close):
-    c=pd.Series(close,dtype=float).reset_index(drop=True); ef=ema_series(c,12); es=ema_series(c,26); mac=ef-es
-    sig=mac.ewm(span=9,adjust=False,min_periods=9).mean(); hist=mac-sig
-    if len(hist.dropna())<2:return np.nan,np.nan,np.nan,False
-    return float(mac.iloc[-1]),float(sig.iloc[-1]),float(hist.iloc[-1]),bool(hist.iloc[-1]>hist.iloc[-2])
-
-def bollinger_metrics(close,n=20):
-    c=pd.Series(close,dtype=float).reset_index(drop=True); mid=c.rolling(n,min_periods=n).mean(); sd=c.rolling(n,min_periods=n).std(ddof=0)
-    w=4*sd/mid.replace(0,np.nan)
-    if len(w.dropna())<21:return np.nan,np.nan,False
-    avg=float(w.iloc[-21:-1].mean()); return float(w.iloc[-1]),avg,bool(w.iloc[-1]>avg)
-
-def cmf_series(high,low,close,volume,n=20):
-    h=pd.Series(high,dtype=float).reset_index(drop=True); l=pd.Series(low,dtype=float).reset_index(drop=True); c=pd.Series(close,dtype=float).reset_index(drop=True); v=pd.Series(volume,dtype=float).fillna(0).reset_index(drop=True)
-    rng=(h-l).replace(0,np.nan); mf=((c-l)-(h-c))/rng
-    return (mf*v).rolling(n,min_periods=n).sum()/v.rolling(n,min_periods=n).sum().replace(0,np.nan)
-
-def mfi_series(high,low,close,volume,n=14):
-    h=pd.Series(high,dtype=float).reset_index(drop=True); l=pd.Series(low,dtype=float).reset_index(drop=True); c=pd.Series(close,dtype=float).reset_index(drop=True); v=pd.Series(volume,dtype=float).fillna(0).reset_index(drop=True)
-    tp=(h+l+c)/3; flow=tp*v; d=tp.diff(); pos=flow.where(d>0,0).rolling(n,min_periods=n).sum(); neg=flow.where(d<0,0).abs().rolling(n,min_periods=n).sum()
-    return 100-(100/(1+pos/neg.replace(0,np.nan)))
-
-def acceptance_metrics(d,resistance):
-    q=d.iloc[-3:]; closes=q['close'].astype(float); lows=q['low'].astype(float)
-    accepted=bool((closes>resistance).all()); retest=bool((lows<=resistance*1.01).any() and (closes>resistance).all())
-    return accepted,retest,float((closes.iloc[-1]-resistance)/resistance*100)
-
-def derivatives_context(ex,ticker):
-    out={'oi':np.nan,'funding':np.nan,'oi_available':False,'funding_available':False}
-    try:
-        t=str(ticker).upper(); perp=None
-        for sym,m in ex.markets.items():
-            if str(m.get('base','')).upper()==t and str(m.get('quote','')).upper()=='USDT' and m.get('swap'):
-                perp=sym; break
-        if perp and ex.has.get('fetchOpenInterest'):
-            z=ex.fetch_open_interest(perp); val=z.get('openInterestValue',z.get('openInterestAmount')); out['oi']=float(val) if val is not None else np.nan; out['oi_available']=pd.notna(out['oi'])
-        if perp and ex.has.get('fetchFundingRate'):
-            z=ex.fetch_funding_rate(perp); val=z.get('fundingRate'); out['funding']=float(val) if val is not None else np.nan; out['funding_available']=pd.notna(out['funding'])
-    except Exception: pass
-    return out
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
+def daily_adx(coin_id):
+    """Robust Daily ADX-14/DMI using CoinGecko then exchange fallbacks."""
+    try:
+        d=cg_daily_ohlc_from_market_chart(coin_id,90)
+        if _valid_daily_ohlc_for_adx(d):
+            av,pdi,mdi,ap=adx_dmi(d["high"],d["low"],d["close"],14)
+            if all(pd.notna(v) for v in (av,pdi,mdi,ap)): return av,pdi,mdi,ap
+    except Exception: pass
+    ticker="BTC" if str(coin_id).lower()=="bitcoin" else str(coin_id).upper()
+    for ex_name in ("bybit","okx","kraken"):
+        d=_exchange_daily_ohlc(ex_name,ticker,120)
+        if _valid_daily_ohlc_for_adx(d):
+            try:
+                av,pdi,mdi,ap=adx_dmi(d["high"],d["low"],d["close"],14)
+                if all(pd.notna(v) for v in (av,pdi,mdi,ap)): return av,pdi,mdi,ap
+            except Exception: pass
+    return np.nan,np.nan,np.nan,np.nan
+
+
 def true_breakout_metrics(exchange_name,ticker):
     """TRUE BREAKOUT PRO metrics: structure, volatility, volume flow, trend, momentum and acceptance."""
     out={"daily_resistance":np.nan,"weekly_resistance":np.nan,"daily_breakout":False,"weekly_breakout":False,"volume_confirmed":False,"close_near_high":False,"atr14":np.nan,"atr20_avg":np.nan,"atr_expanding":False,"atr_breakout_distance":np.nan,"atr_distance_confirmed":False,"obv_breakout":False,"ema20":np.nan,"ema50":np.nan,"ema200":np.nan,"ema_bullish":False,"ema200_bullish":False,"bb_width":np.nan,"bb_expanding":False,"cmf20":np.nan,"cmf_bullish":False,"mfi14":np.nan,"mfi_bullish":False,"macd_hist":np.nan,"macd_accelerating":False,"breakout_accepted":False,"breakout_retest_held":False,"breakout_distance_pct":np.nan,"oi":np.nan,"funding":np.nan,"oi_available":False,"funding_available":False,"true_breakout_data":False,"breakout_exchange":None}
