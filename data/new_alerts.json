@@ -1,26 +1,8 @@
 [
   {
-    "id": "bonk",
-    "ticker": "BONK",
-    "score": 82.9,
+    "id": "sonic-3",
+    "ticker": "S",
+    "score": 81.2,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "four",
-    "ticker": "FORM",
-    "score": 82.2,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "stonk-3",
-    "ticker": "STONK",
-    "score": 81.1,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "useless-3",
-    "ticker": "USELESS",
-    "score": 80.9,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   }
 ]
