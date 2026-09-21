@@ -524,22 +524,124 @@ def _cache_key_coin(exchange_name, ticker):
     return (str(exchange_name).lower(), str(ticker).upper())
 
 
-def _mtf_rsi_cached(ticker):
-    """Cache the existing rsi_engine result so each ticker is evaluated once."""
-    key = str(ticker).upper()
-    if key not in _ANALYSIS_CACHE:
+def _normalise_mtf_rsi(raw):
+    """Normalize rsi_engine output to the scanner's six canonical timeframe keys."""
+    if not isinstance(raw, dict):
+        return {}
+    aliases = {
+        "1h":"1H", "1H":"1H", "60m":"1H", "60min":"1H",
+        "4h":"4H", "4H":"4H", "240m":"4H", "240min":"4H",
+        "1d":"1D", "1D":"1D", "daily":"1D",
+        "1w":"1W", "1W":"1W", "weekly":"1W",
+        "1m":"1M", "1M":"1M", "monthly":"1M",
+        "3m":"3M", "3M":"3M", "quarterly":"3M",
+    }
+    out = {}
+    for k, v in raw.items():
+        ck = aliases.get(str(k).strip(), aliases.get(str(k).strip().lower()))
+        if ck is None:
+            continue
         try:
-            _ANALYSIS_CACHE[key] = multi_timeframe_rsi(key)
-        except Exception:
-            _ANALYSIS_CACHE[key] = {}
-    return _ANALYSIS_CACHE[key]
+            fv = float(v)
+            if np.isfinite(fv) and 0 <= fv <= 100:
+                out[ck] = fv
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _rsi_from_close(close, period=14):
+    """Return the latest RSI-14 from a close series, or NaN if insufficient data."""
+    try:
+        s = pd.Series(close, dtype=float).dropna().reset_index(drop=True)
+        if len(s) < period + 1:
+            return np.nan
+        return rsi(s, period)
+    except Exception:
+        return np.nan
+
+
+def _exchange_mtf_rsi_fallback(ex, symbol):
+    """Build missing MTF RSI values from the same cached exchange candle architecture.
+
+    The fallback deliberately returns only timeframes for which enough completed
+    candles exist. Missing long-term RSI is represented by NaN rather than None.
+    """
+    out = {}
+    try:
+        # Intraday values.
+        for tf, limit in (("1h", 120), ("4h", 120)):
+            d = _completed_ohlcv(ex, symbol, tf, limit)
+            if len(d) >= 30:
+                out["1H" if tf == "1h" else "4H"] = _rsi_from_close(d["close"])
+
+        # Daily and weekly values.
+        d = _completed_ohlcv(ex, symbol, "1d", 420)
+        if len(d) >= 30:
+            out["1D"] = _rsi_from_close(d["close"])
+
+        w = _completed_ohlcv(ex, symbol, "1w", 150)
+        if len(w) >= 30:
+            out["1W"] = _rsi_from_close(w["close"])
+
+            # Aggregate completed weekly closes into calendar-month/quarter closes.
+            # This avoids relying on exchange-specific 1M/3M timeframe support.
+            ww = w.copy()
+            ww["dt"] = pd.to_datetime(ww["ts"], unit="ms", utc=True)
+            ww = ww.set_index("dt")
+            monthly = ww["close"].resample("ME").last().dropna()
+            quarterly = ww["close"].resample("QE").last().dropna()
+            if len(monthly) >= 15:
+                out["1M"] = _rsi_from_close(monthly)
+            if len(quarterly) >= 15:
+                out["3M"] = _rsi_from_close(quarterly)
+    except Exception:
+        pass
+    return {k: v for k, v in out.items() if pd.notna(v)}
+
+
+def _mtf_rsi_cached(ticker, ex=None, symbol=None):
+    """Return normalized MTF RSI, using rsi_engine first and exchange-candle fallback."""
+    key = str(ticker).upper()
+    cache_key = ("rsi", key, getattr(ex, "id", None), symbol)
+    if cache_key in _ANALYSIS_CACHE:
+        return dict(_ANALYSIS_CACHE[cache_key])
+
+    vals = {}
+    try:
+        vals = _normalise_mtf_rsi(multi_timeframe_rsi(key))
+    except Exception:
+        vals = {}
+
+    # If rsi_engine returned None/partial/invalid data, fill missing timeframes
+    # from the same exchange candle cache used by the rest of v8.
+    if ex is not None and symbol:
+        missing = {"1H", "4H", "1D", "1W", "1M", "3M"} - set(vals)
+        if missing:
+            fallback = _exchange_mtf_rsi_fallback(ex, symbol)
+            for tf, value in fallback.items():
+                vals.setdefault(tf, value)
+
+    _ANALYSIS_CACHE[cache_key] = dict(vals)
+    return dict(vals)
 
 
 def weighted_rsi_from_values(vals):
+    """Calculate the weighted RSI without ever returning the literal None."""
     weights={"1H":.05,"4H":.10,"1D":.20,"1W":.25,"1M":.20,"3M":.20}
-    usable=[(float(v),weights[k]) for k,v in vals.items() if k in weights and pd.notna(v)]
+    if not isinstance(vals, dict):
+        return np.nan
+    usable=[]
+    for k, w in weights.items():
+        try:
+            v=float(vals.get(k, np.nan))
+            if np.isfinite(v) and 0 <= v <= 100:
+                usable.append((v,w))
+        except (TypeError, ValueError):
+            continue
     if not usable:
         return np.nan
+    # Re-normalize weights when one or more very-long timeframes are unavailable.
     return float(np.average([v for v,w in usable], weights=[w for v,w in usable]))
 
 
@@ -669,7 +771,7 @@ def analysis_bundle(exchange_name, coin_row):
             out["base"]=base_quality_metrics(d)
             # BTC-down-day resilience uses timestamp-aligned daily returns.
             out["down_beta"],out["down_rel"],out["down_hit"]=downside_resilience_cached(ex,sym)
-        vals=_mtf_rsi_cached(ticker); out["rsi"]=vals; out["weighted_rsi"]=weighted_rsi_from_values(vals)
+        vals=_mtf_rsi_cached(ticker, ex, sym); out["rsi"]=vals; out["weighted_rsi"]=weighted_rsi_from_values(vals)
         # Prefer exchange daily calculations; CoinGecko is fallback.
         if len(d)>=50:
             sk,sd=stoch_rsi(d.close)
