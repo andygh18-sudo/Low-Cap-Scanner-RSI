@@ -1,8 +1,14 @@
 [
   {
-    "id": "sonic-3",
-    "ticker": "S",
-    "score": 81.2,
+    "id": "useless-3",
+    "ticker": "USELESS",
+    "score": 82.2,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "thorchain",
+    "ticker": "RUNE",
+    "score": 80.8,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
   }
 ]
