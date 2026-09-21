@@ -1,62 +1,62 @@
 [
   {
-    "id": "sonic-3",
-    "ticker": "S",
+    "id": "dogwifcoin",
+    "ticker": "WIF",
     "score": 87.2,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "optimism",
-    "ticker": "OP",
-    "score": 85.5,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "sei-network",
-    "ticker": "SEI",
-    "score": 85.3,
-    "signal": "\ud83d\ude80 TRUE BREAKOUT"
-  },
-  {
-    "id": "plasma",
-    "ticker": "XPL",
-    "score": 84.9,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "arweave",
-    "ticker": "AR",
-    "score": 84.6,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "fetch-ai",
     "ticker": "FET",
-    "score": 84.5,
+    "score": 86.9,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
   },
   {
-    "id": "zencash",
-    "ticker": "ZEN",
-    "score": 84.0,
+    "id": "sonic-3",
+    "ticker": "S",
+    "score": 86.7,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "sei-network",
+    "ticker": "SEI",
+    "score": 86.2,
+    "signal": "\ud83d\ude80 TRUE BREAKOUT"
+  },
+  {
+    "id": "optimism",
+    "ticker": "OP",
+    "score": 85.2,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "arweave",
+    "ticker": "AR",
+    "score": 84.8,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "plasma",
+    "ticker": "XPL",
+    "score": 84.4,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "kamino",
     "ticker": "KMNO",
-    "score": 83.3,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "dogwifcoin",
-    "ticker": "WIF",
-    "score": 82.9,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+    "score": 84.0,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "mina-protocol",
     "ticker": "MINA",
-    "score": 82.1,
+    "score": 83.8,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "dgrid-ai",
+    "ticker": "DGAI",
+    "score": 82.7,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]

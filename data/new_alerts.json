@@ -2,7 +2,19 @@
   {
     "id": "dogwifcoin",
     "ticker": "WIF",
-    "score": 82.9,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+    "score": 87.2,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "kamino",
+    "ticker": "KMNO",
+    "score": 84.0,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
+    "id": "dgrid-ai",
+    "ticker": "DGAI",
+    "score": 82.7,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
