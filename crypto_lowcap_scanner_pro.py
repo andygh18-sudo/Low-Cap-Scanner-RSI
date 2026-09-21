@@ -78,8 +78,11 @@ def stoch_rsi(values, rsi_len=14, stoch_len=14, k_len=3, d_len=3):
     rs = rsi_series(values, rsi_len)
     low = rs.rolling(stoch_len, min_periods=stoch_len).min()
     high = rs.rolling(stoch_len, min_periods=stoch_len).max()
-    denom = (high - low).replace(0, np.nan)
-    stoch = ((rs - low) / denom) * 100.0
+    denom = high - low
+    # A flat RSI window makes the textbook StochRSI denominator zero.
+    # Treat that case as neutral (50) instead of propagating NaN into %K/%D.
+    stoch = ((rs - low) / denom.replace(0, np.nan)) * 100.0
+    stoch = stoch.where(denom != 0, 50.0)
     k = stoch.rolling(k_len, min_periods=k_len).mean()
     d = k.rolling(d_len, min_periods=d_len).mean()
     if k.dropna().empty or d.dropna().empty:
@@ -90,10 +93,14 @@ def stoch_rsi(values, rsi_len=14, stoch_len=14, k_len=3, d_len=3):
 def daily_stochrsi(coin_id):
     """Daily StochRSI calculated from completed CoinGecko-derived daily closes."""
     try:
-        d = cg_daily_ohlc_from_market_chart(coin_id, 90)
-        if d.empty or len(d) < 40:
+        # Use the longest hourly-capable window so short-history coins have
+        # more completed daily candles available for the StochRSI warm-up.
+        d = cg_daily_ohlc_from_market_chart(coin_id, 100)
+        # RSI-14 + StochRSI-14 + K3 + D3 needs about 32 completed closes.
+        if d.empty or len(d) < 33:
             return np.nan, np.nan
-        return stoch_rsi(d["close"])
+        k, dval = stoch_rsi(d["close"])
+        return k, dval
     except Exception:
         return np.nan, np.nan
 
