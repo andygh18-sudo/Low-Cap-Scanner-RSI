@@ -1,8 +1,14 @@
 [
   {
-    "id": "dgrid-ai",
-    "ticker": "DGAI",
-    "score": 80.7,
+    "id": "four",
+    "ticker": "FORM",
+    "score": 82.8,
     "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+  },
+  {
+    "id": "thorchain",
+    "ticker": "RUNE",
+    "score": 81.1,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
