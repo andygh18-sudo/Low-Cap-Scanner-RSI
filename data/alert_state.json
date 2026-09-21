@@ -2,25 +2,25 @@
   {
     "id": "starknet",
     "ticker": "STRK",
-    "score": 80.7,
+    "score": 80.1,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "sonic-3",
     "ticker": "S",
-    "score": 79.7,
+    "score": 79.5,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "sei-network",
     "ticker": "SEI",
-    "score": 77.7,
+    "score": 78.8,
     "signal": "\ud83d\ude80 TRUE BREAKOUT"
   },
   {
     "id": "optimism",
     "ticker": "OP",
-    "score": 77.5,
+    "score": 75.9,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
