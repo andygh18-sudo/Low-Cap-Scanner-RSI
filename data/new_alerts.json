@@ -1,44 +1,20 @@
 [
   {
-    "id": "starknet",
-    "ticker": "STRK",
-    "score": 87.7,
+    "id": "kamino",
+    "ticker": "KMNO",
+    "score": 82.4,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
-    "id": "kamino",
-    "ticker": "KMNO",
-    "score": 84.1,
-    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "zencash",
-    "ticker": "ZEN",
-    "score": 82.1,
+    "id": "mina-protocol",
+    "ticker": "MINA",
+    "score": 81.9,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "arweave",
     "ticker": "AR",
-    "score": 82.0,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "plasma",
-    "ticker": "XPL",
-    "score": 81.6,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "zama",
-    "ticker": "ZAMA",
-    "score": 80.9,
+    "score": 81.8,
     "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
-  },
-  {
-    "id": "dgrid-ai",
-    "ticker": "DGAI",
-    "score": 80.2,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
