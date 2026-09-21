@@ -1,20 +1,38 @@
 [
   {
-    "id": "fartcoin",
-    "ticker": "FARTCOIN",
-    "score": 85.2,
+    "id": "dogwifcoin",
+    "ticker": "WIF",
+    "score": 86.8,
+    "signal": "\ud83d\ude80 TRUE BREAKOUT"
+  },
+  {
+    "id": "fetch-ai",
+    "ticker": "FET",
+    "score": 86.4,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
     "id": "bonk",
     "ticker": "BONK",
-    "score": 84.4,
+    "score": 84.7,
+    "signal": "\ud83d\ude80 TRUE BREAKOUT"
+  },
+  {
+    "id": "optimism",
+    "ticker": "OP",
+    "score": 82.3,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
-    "id": "zencash",
-    "ticker": "ZEN",
-    "score": 84.2,
+    "id": "dgrid-ai",
+    "ticker": "DGAI",
+    "score": 82.1,
+    "signal": "\ud83d\udfe2 BREAKOUT CONFIRMATION"
+  },
+  {
+    "id": "mina-protocol",
+    "ticker": "MINA",
+    "score": 82.0,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   }
 ]
