@@ -331,6 +331,7 @@ def main():
                  f"StochRSI K/D: {fmt(btc_mm.get('stoch_k',np.nan))} / {fmt(btc_mm.get('stoch_d',np.nan))}\nEMA20>EMA50: {btc_mm.get('ema_bullish')}\n"
                  f"\n₿ BTC DOMINANCE: {fmt(dom['current'])}%\n{dom['trend']}\n"
                  f"Dominance 1D: {fmt(dom['change_1d'])} percentage points\nDominance 7D: {fmt(dom['change_7d'])} percentage points\n"
+                 f"\n📊 TOTAL3/BTC: {fmt(t3['ratio'])}\n{t3['trend']}\nTOTAL3/BTC 1D: {fmt(t3['change_1d_pct'])}%\nTOTAL3/BTC 7D: {fmt(t3['change_7d_pct'])}%\n"
                  f"\nALTCOIN BREADTH: {breadth:.1f}%\nOVERALL REGIME: {regime}\nMissing RSI: {', '.join(missing_btc) if missing_btc else 'None'}")
         ok,err=telegram(btc_msg)
         if ok: keys.add(btc_key); sent+=1
