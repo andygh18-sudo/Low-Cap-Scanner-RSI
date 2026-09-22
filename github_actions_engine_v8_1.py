@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import ccxt
 
-VERSION = "v8.2"
+VERSION = "v8.2.1"
 CG = "https://api.coingecko.com/api/v3"
 ZEN_ID = "horizen"
 WEIGHTS = {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}
@@ -30,6 +30,12 @@ def markets():
     frames=[]
     for page in (1,2):
         frames.append(pd.DataFrame(cg_get("coins/markets", {"vs_currency":"usd","order":"market_cap_desc","per_page":250,"page":page,"sparkline":"false","price_change_percentage":"24h,7d"})))
+    # Explicitly fetch Horizen so ZEN is retained even when outside Top-500.
+    try:
+        zen=pd.DataFrame(cg_get("coins/markets", {"vs_currency":"usd","ids":ZEN_ID,"sparkline":"false","price_change_percentage":"24h,7d"}))
+        if not zen.empty: frames.append(zen)
+    except Exception as e:
+        print(f"ZEN direct fetch failed: {type(e).__name__}: {e}")
     return pd.concat(frames,ignore_index=True).drop_duplicates("id")
 
 def exchange(name):
@@ -213,8 +219,12 @@ def main():
     rows=[]
     exchange_pool=[exchange(name) for name in ("okx","kraken","bybit")]
     exchange_pool=[e for e in exchange_pool if e is not None]
+    rejected_zero_rsi=[]
     for _,x in pre.iterrows():
         t=str(x.symbol).upper(); vals,rsi_sources=mtf_rsi(exchange_pool,t); wr=weighted(vals); valid_tfs=[k for k,v in vals.items() if pd.notna(v)]; rsi_quality=len(valid_tfs)/len(WEIGHTS)*100; rsi_source="/".join(dict.fromkeys(rsi_sources[k] for k in WEIGHTS if rsi_sources[k]!="N/A")) or "N/A"; mm={}; source=primary_exchange.upper() if primary_exchange!="N/A" else "N/A"
+        if len(valid_tfs)==0:
+            rejected_zero_rsi.append({"ticker":t,"coin":x["name"],"reason":"No valid RSI timeframe data"})
+            continue
         for name in ("okx","kraken","bybit"):
             try:
                 e=exchange(name); s=symbol(e,t)
@@ -235,13 +245,20 @@ def main():
     out=pd.DataFrame(rows).sort_values(["true_breakout","technical_score"],ascending=[False,False])
     breadth=float((c.price_change_percentage_24h>0).mean()*100); regime="RISK-ON" if btc24>2 and btc7>3 and breadth>=55 else ("RISK-OFF" if btc24<-3 and btc7<-5 and breadth<35 else "MIXED / TRANSITION")
     now=datetime.now(timezone.utc).isoformat(); clean=out.replace({np.nan:None})
-    payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"candidate_count":len(c),"pre_screen_count":len(pre),"exchange":primary_exchange},"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
+    quality_counts={"pre_screen":len(pre),"ranked":len(out),
+        "zero_rsi_rejected":len(rejected_zero_rsi),
+        "rsi_6of6":int((out.rsi_valid_timeframes==6).sum()) if not out.empty else 0,
+        "rsi_5plus":int((out.rsi_valid_timeframes>=5).sum()) if not out.empty else 0,
+        "rsi_3plus":int((out.rsi_valid_timeframes>=3).sum()) if not out.empty else 0,
+        "data_quality_warning":int((out.rsi_quality_pct<50).sum()) if not out.empty else 0}
+    payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"candidate_count":len(c),"pre_screen_count":len(pre),"ranked_count":len(out),"exchange":primary_exchange,"data_quality":quality_counts},"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
     os.makedirs("data",exist_ok=True); open("data/latest_scan.json","w",encoding="utf-8").write(json.dumps(payload,indent=2,default=str))
     statefile="data/telegram_alert_state.json"; state=json.load(open(statefile,encoding="utf-8")) if os.path.exists(statefile) else {"keys":[]}; keys=set(state.get("keys",[])); sent=0
     for r in out.to_dict("records"):
         sig=r["breakout_state"]; score=float(r.get("technical_score") or 0); key=f"{now[:10]}|{r['ticker']}|{sig}"
         if ("BREAKOUT" in sig or "RETEST" in sig) and (score>=70 or r["ticker"]=="ZEN") and key not in keys:
-            msg=f"{sig}\n\n{r['coin']} ({r['ticker']})\nTechnical score: {score:.1f}\nWeighted RSI: {r['weighted_rsi'] if r['weighted_rsi'] is not None else 'N/A'}\nBTC-relative 7D: {r['btc_rel_7d_pct']:.2f}%\nVol/MCap: {r['vol_mcap_pct']:.2f}%\nADX: {r['adx'] if r['adx'] is not None else 'N/A'}\nRegime: {regime} | BTC 24h: {btc24:.2f}% | BTC 7d: {btc7:.2f}%"
+            missing=[tf for tf in WEIGHTS if pd.isna(r.get("rsi_"+tf.lower()))]
+            msg=f"{sig}\n\n{r['coin']} ({r['ticker']})\nTechnical score: {score:.1f}\nWeighted RSI: {r['weighted_rsi'] if r['weighted_rsi'] is not None else 'N/A'}\nBTC-relative 7D: {r['btc_rel_7d_pct']:.2f}%\nVol/MCap: {r['vol_mcap_pct']:.2f}%\nADX: {r['adx'] if r['adx'] is not None else 'N/A'}\n\nDATA_QUALITY\nRSI coverage: {r['rsi_valid_timeframes']}/6 ({r['rsi_quality_pct']:.0f}%)\nRSI source: {r['rsi_source']}\nMissing RSI: {', '.join(missing) if missing else 'None'}\n\nRegime: {regime} | BTC 24h: {btc24:.2f}% | BTC 7d: {btc7:.2f}%"
             ok,err=telegram(msg)
             if ok:keys.add(key); sent+=1
             else:print("Telegram:",err)
