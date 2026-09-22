@@ -1158,7 +1158,7 @@ def btc_market_context(exchange_name):
     except Exception:
         return None
 
-st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8.3")
+st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8.4")
 st.caption("Fast background results + optional deep live breakout analysis")
 
 # Show the latest GitHub Actions background result if available.
@@ -1186,6 +1186,123 @@ try:
 except Exception:
     pass
 
+# ------------------------------ V8.4 INTEGRATED DASHBOARD ------------------------------
+def _safe_num(v):
+    try:
+        x=float(v)
+        return x if np.isfinite(x) else np.nan
+    except Exception:
+        return np.nan
+
+def _fmt(v, suffix="", decimals=1):
+    x=_safe_num(v)
+    return "N/A" if pd.isna(x) else f"{x:.{decimals}f}{suffix}"
+
+def _load_background_scan():
+    try:
+        import json, os
+        p="data/latest_scan.json"
+        if not os.path.exists(p):
+            return {}
+        with open(p,"r",encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _background_age_minutes(ts):
+    try:
+        return max(0.0,(datetime.now(timezone.utc)-datetime.fromisoformat(str(ts).replace("Z","+00:00"))).total_seconds()/60)
+    except Exception:
+        return np.nan
+
+_bg=_load_background_scan()
+if _bg:
+    _meta=_bg.get("meta",{}) or {}
+    _btc=_bg.get("btc_market",{}) or {}
+    _age=_background_age_minutes(_meta.get("generated_at"))
+    _fresh="🟢 FRESH" if pd.notna(_age) and _age<=90 else ("🟡 AGING" if pd.notna(_age) and _age<=240 else "🔴 STALE")
+    st.subheader("🌐 General Crypto Market Direction")
+    _mc=st.columns(8)
+    _mc[0].metric("BTC Direction",str(_btc.get("signal","N/A")).replace("🟢 ","").replace("🔴 ","").replace("🟡 ","").replace("🟠 ","").replace("⚪ ",""))
+    _bp=_safe_num(_meta.get("btc_price_usd"))
+    _mc[1].metric("BTC Price",f"$ {_bp:,.0f}" if pd.notna(_bp) else "N/A")
+    _mc[2].metric("BTC 24h",_fmt(_meta.get("btc_24h"),"%",2))
+    _mc[3].metric("BTC 7d",_fmt(_meta.get("btc_7d"),"%",2))
+    _mc[4].metric("BTC Dominance",_fmt(_meta.get("btc_dominance_pct"),"%",2))
+    _mc[5].metric("USDT Dominance",_fmt(_meta.get("usdt_dominance_pct"),"%",2))
+    _mc[6].metric("Fear & Greed",str(_meta.get("fear_greed_value","N/A")))
+    _mc[7].metric("Scan status",_fresh)
+    st.caption(f"Background engine {_meta.get('engine_version','N/A')} | Generated {_meta.get('generated_at','N/A')} | Age {_fmt(_age,' min',0)} | Regime {_meta.get('regime','N/A')} | BTC dominance {_meta.get('btc_dominance_trend','N/A')} | USDT dominance {_meta.get('usdt_dominance_trend','N/A')} | TOTAL3/BTC {_meta.get('total3_btc_trend','N/A')} | F&G {_meta.get('fear_greed_classification','N/A')} | Breadth {_fmt(_meta.get('breadth'),"%",1)}")
+    _bc=st.columns(6)
+    _bc[0].metric("BTC Weighted RSI",_fmt(_btc.get("weighted_rsi")))
+    _bc[1].metric("BTC ADX",_fmt(_btc.get("adx")))
+    _bc[2].metric("BTC +DI",_fmt(_btc.get("plus_di")))
+    _bc[3].metric("BTC -DI",_fmt(_btc.get("minus_di")))
+    _bc[4].metric("BTC Stoch K",_fmt(_btc.get("stoch_k")))
+    _bc[5].metric("BTC EMA", "BULLISH" if _btc.get("ema_bullish") else "NOT BULLISH")
+
+    _bgrows=_bg.get("all") or _bg.get("top10") or []
+    _bgdf=pd.DataFrame(_bgrows)
+    if not _bgdf.empty:
+        st.subheader("🚀 Breakout Radar")
+        _state_order={"🚀 TRUE BREAKOUT":4,"🟢 RETEST HELD":3,"🟢 BREAKOUT ACCEPTED":2,"🟡 BREAKOUT ATTEMPT":1}
+        _bgdf["_state_rank"]=_bgdf.get("breakout_state","").map(_state_order).fillna(-1)
+        _radar=_bgdf[_bgdf["_state_rank"]>=1].sort_values(["_state_rank","technical_score"],ascending=[False,False]).head(20)
+        _cols=[c for c in ["coin","ticker","breakout_state","technical_score","risk_adjusted_score","breakout_confidence","weighted_rsi","btc_rel_7d_pct","vol_mcap_pct","daily_breakout","weekly_breakout","volume_confirmed","obv_breakout","atr_expanding","ema_bullish"] if c in _radar.columns]
+        st.dataframe(_radar[_cols].round(2),use_container_width=True,hide_index=True)
+        if _radar.empty:
+            st.info("No active breakout states in the latest background scan.")
+
+        st.subheader("📊 Multi-Timeframe RSI")
+        _heat=[]
+        for _,_rr in _bgdf.iterrows():
+            _rv=_rr.get("rsi") or _rr.get("mtf_rsi") or {}
+            if not isinstance(_rv,dict) or not _rv:
+                continue
+            _hr={"Coin":_rr.get("coin",""),"Ticker":str(_rr.get("ticker","")).upper()}
+            for _tf in ["1H","4H","1D","1W","1M","3M"]:
+                _hr[_tf]=_safe_num(_rv.get(_tf))
+            _hr["Weighted RSI"]=_safe_num(_rr.get("weighted_rsi"))
+            _vals=[_hr[_tf] for _tf in ["1H","4H","1D","1W","1M","3M"] if pd.notna(_hr[_tf])]
+            _hr["RSI coverage"]=f"{len(_vals)}/6"
+            _hr["Deep oversold"]=sum(x<30 for x in _vals)>=2
+            _hr["Bullish alignment"]=sum(x>=60 for x in _vals)>=4
+            _hr["Bearish alignment"]=sum(x<=40 for x in _vals)>=4
+            _heat.append(_hr)
+        _heatdf=pd.DataFrame(_heat)
+        if not _heatdf.empty:
+            st.dataframe(_heatdf.round(1),use_container_width=True,hide_index=True)
+        else:
+            st.info("The background scan does not contain per-timeframe RSI values.")
+
+        st.subheader("🎯 Coin Deep Dive — Background")
+        _tickers=sorted(_bgdf["ticker"].dropna().astype(str).str.upper().unique()) if "ticker" in _bgdf else []
+        if _tickers:
+            _default=_tickers.index("ZEN") if "ZEN" in _tickers else 0
+            _selected=st.selectbox("Select background coin",_tickers,index=_default,key="bg_coin_select")
+            _coin=_bgdf[_bgdf["ticker"].astype(str).str.upper().eq(_selected)].head(1)
+            if not _coin.empty:
+                _z=_coin.iloc[0]
+                _dc=st.columns(6)
+                _dc[0].metric("Technical",_fmt(_z.get("technical_score")))
+                _dc[1].metric("Risk-adjusted",_fmt(_z.get("risk_adjusted_score")))
+                _dc[2].metric("Confidence",_fmt(_z.get("breakout_confidence")))
+                _dc[3].metric("Weighted RSI",_fmt(_z.get("weighted_rsi")))
+                _dc[4].metric("BTC-rel 7d",_fmt(_z.get("btc_rel_7d_pct"),"%"))
+                _dc[5].metric("Vol/MCap",_fmt(_z.get("vol_mcap_pct"),"%"))
+                _l,_r=st.columns(2)
+                with _l:
+                    st.markdown("**Structure & momentum**")
+                    _q=[c for c in ["breakout_state","daily_breakout","weekly_breakout","volume_confirmed","obv_breakout","atr_expanding","ema_bullish","base_quality","mcap_m","price_change_24h_pct"] if c in _z.index]
+                    st.dataframe(pd.DataFrame({"Metric":_q,"Value":[_z[c] for c in _q]}),hide_index=True,use_container_width=True)
+                with _r:
+                    st.markdown("**Risk & derivatives**")
+                    _q=[c for c in ["downside_beta","btc_down_day_rel_pct","btc_down_day_outperform_pct","oi_1d_pct","oi_3d_pct","oi_7d_pct","funding","derivatives_state","supply_score","circ_pct_max","fdv_mcap","unlock_risk"] if c in _z.index]
+                    st.dataframe(pd.DataFrame({"Metric":_q,"Value":[_z[c] for c in _q]}),hide_index=True,use_container_width=True)
+
+    _qc=_meta.get("quality_counts",{}) or {}
+    st.caption(f"Scan quality: candidates={_meta.get('candidate_count','N/A')} | pre-screen={_meta.get('pre_screen_count','N/A')} | ranked={_meta.get('ranked_count','N/A')} | RSI 6/6={_qc.get('rsi_full','N/A')} | RSI 0/6={_qc.get('rsi_zero','N/A')}")
+
 # ------------------------------ V8 DASHBOARD ------------------------------
 with st.sidebar:
     st.header("Filters")
@@ -1197,6 +1314,7 @@ with st.sidebar:
     deep_count=st.slider("Deep technical analysis", min_value=10, max_value=25, value=15, step=5, key="v8_deep_count")
     exchange=st.selectbox("Exchange candles",["okx","kraken","bybit"],index=0, key="v8_exchange")
     run=st.button("🚀 Run full scanner",type="primary", key="v8_run")
+    live_telegram=st.checkbox("Send Telegram from dashboard",value=False,help="Keep disabled when GitHub Actions is already sending scanner alerts, to prevent duplicates.")
     st.caption("The dashboard loads the latest GitHub Actions scan by default. Run the live technical engine only when you need fresh exchange candles.")
     st.caption("v8 analyses a broad pre-screen before applying the expensive structural breakout engine. ZEN is always retained.")
 
@@ -1341,7 +1459,7 @@ if run or st.session_state.run:
 
         # Telegram notifications use the same final ranking dataframe as the UI,
         # so alerts cannot diverge from what the scanner displays.
-        tg_result = send_scanner_telegram_alerts(finaldf, regime, btc24, btc7)
+        tg_result = send_scanner_telegram_alerts(finaldf, regime, btc24, btc7) if live_telegram else {"enabled": False, "sent": 0, "skipped": 0, "error": None}
         if TELEGRAM_ENABLED:
             if tg_result.get("error"):
                 st.warning(f"Telegram alert issue: {tg_result['error']}")
@@ -1349,7 +1467,7 @@ if run or st.session_state.run:
                 st.caption(f"Telegram alerts: {tg_result.get('sent',0)} new alert(s), {tg_result.get('skipped',0)} duplicate(s) suppressed.")
         else:
             st.caption("Telegram alerts are disabled until TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are configured.")
-        st.subheader("TRUE BREAKOUT PRO v8.3 — Deep ranking")
+        st.subheader("TRUE BREAKOUT PRO v8.4 — Deep ranking")
         st.dataframe(finaldf.round(2),use_container_width=True,hide_index=True)
 
         # Focus table: strongest structural candidates only.
