@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import ccxt
 
-VERSION = "v8.2.3"
+VERSION = "v8.2.4"
 CG = "https://api.coingecko.com/api/v3"
 ZEN_ID = "horizen"
 WEIGHTS = {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}
@@ -62,6 +62,46 @@ def btc_dominance():
     elif pd.notna(d7) and d7<=-0.50: trend="📉 BTC DOMINANCE FALLING"
     else: trend="➡️ BTC DOMINANCE FLAT"
     return {"current":current,"change_1d":d1,"change_7d":d7,"trend":trend}
+
+def total3_btc():
+    """Estimate TOTAL3/BTC from CoinGecko global market-cap history.
+    TOTAL3 = total crypto market cap - BTC market cap - ETH market cap.
+    Ratio = TOTAL3 market cap / BTC market cap.
+    """
+    ratio=np.nan; d1=np.nan; d7=np.nan
+    try:
+        h=cg_get("global/market_cap_chart",{"vs_currency":"usd","days":"7"})
+        total_hist=h.get("market_cap",[]) or h.get("market_caps",[])
+        pct=h.get("market_cap_percentage",{})
+        btc_pct=pct.get("btc") or pct.get("bitcoin") or []
+        eth_pct=pct.get("eth") or pct.get("ethereum") or []
+        if total_hist and btc_pct and eth_pct:
+            total=pd.DataFrame(total_hist,columns=["ts","total"]).drop_duplicates("ts").sort_values("ts")
+            bp=pd.DataFrame(btc_pct,columns=["ts","btc_pct"]).drop_duplicates("ts").sort_values("ts")
+            ep=pd.DataFrame(eth_pct,columns=["ts","eth_pct"]).drop_duplicates("ts").sort_values("ts")
+            z=total.merge(bp,on="ts",how="inner").merge(ep,on="ts",how="inner")
+            if len(z)>=2:
+                z["btc_mcap"]=z["total"]*z["btc_pct"]/100.0
+                z["total3"]=z["total"]*(1.0-(z["btc_pct"]+z["eth_pct"])/100.0)
+                z["ratio"]=z["total3"]/z["btc_mcap"].replace(0,np.nan)
+                z=z.replace([np.inf,-np.inf],np.nan).dropna(subset=["ratio"])
+                if len(z):
+                    ratio=float(z.iloc[-1].ratio)
+                    end_ts=pd.to_datetime(z.iloc[-1].ts,unit="ms",utc=True)
+                    target1=end_ts-pd.Timedelta(days=1)
+                    target7=end_ts-pd.Timedelta(days=7)
+                    i1=(pd.to_datetime(z.ts,unit="ms",utc=True)-target1).abs().idxmin()
+                    i7=(pd.to_datetime(z.ts,unit="ms",utc=True)-target7).abs().idxmin()
+                    r1=float(z.loc[i1,"ratio"]); r7=float(z.loc[i7,"ratio"])
+                    d1=(ratio/r1-1)*100 if r1 else np.nan
+                    d7=(ratio/r7-1)*100 if r7 else np.nan
+    except Exception as e:
+        print(f"TOTAL3/BTC failed: {type(e).__name__}: {e}")
+    if pd.isna(ratio): return {"ratio":np.nan,"change_1d_pct":np.nan,"change_7d_pct":np.nan,"trend":"N/A"}
+    if pd.notna(d7) and d7>=5: trend="📈 TOTAL3/BTC RISING"
+    elif pd.notna(d7) and d7<=-5: trend="📉 TOTAL3/BTC FALLING"
+    else: trend="➡️ TOTAL3/BTC FLAT"
+    return {"ratio":ratio,"change_1d_pct":d1,"change_7d_pct":d7,"trend":trend}
 
 def exchange(name):
     k=f"ex:{name}"
@@ -224,6 +264,7 @@ def main():
     df=markets(); df["mcap_m"]=df.market_cap/1e6; df["vol_m"]=df.total_volume/1e6; df["vr"]=df.total_volume/df.market_cap*100
     btc=df[df.id=="bitcoin"].iloc[0]; btc7=float(btc.price_change_percentage_7d or btc.price_change_percentage_7d_in_currency or 0); btc24=float(btc.price_change_percentage_24h or 0)
     dom=btc_dominance()
+    t3=total3_btc()
     stable={"tether","usd-coin","dai","usds","true-usd","usdd"}; c=df[df.mcap_m.between(20,500)&(df.vol_m>=2)&(df.vr>=5)&~df.id.isin(stable)].copy()
     zen=df[df.id==ZEN_ID]
     if not zen.empty:c=pd.concat([c,zen]).drop_duplicates("id")
@@ -275,12 +316,12 @@ def main():
     regime="RISK-ON" if btc24>2 and btc7>3 and breadth>=55 else ("RISK-OFF" if btc24<-3 and btc7<-5 and breadth<35 else "MIXED / TRANSITION")
     now=datetime.now(timezone.utc).isoformat(); clean=out.replace({np.nan:None})
     quality_counts={"pre_screen":len(pre),"ranked":len(out),"zero_rsi_rejected":len(rejected_zero_rsi),"rsi_6of6":int((out.rsi_valid_timeframes==6).sum()) if not out.empty else 0,"rsi_5plus":int((out.rsi_valid_timeframes>=5).sum()) if not out.empty else 0,"rsi_3plus":int((out.rsi_valid_timeframes>=3).sum()) if not out.empty else 0,"data_quality_warning":int((out.rsi_quality_pct<50).sum()) if not out.empty else 0}
-    btc_payload={"signal":btc_signal,"price_change_24h":btc24,"price_change_7d":btc7,"weighted_rsi":btc_wrsi,"rsi_valid_timeframes":len(btc_valid),"rsi_quality_pct":len(btc_valid)/6*100,"rsi_source":btc_rsi_source,"adx":btc_mm.get("adx"),"plus_di":btc_mm.get("pdi"),"minus_di":btc_mm.get("mdi"),"stoch_k":btc_mm.get("stoch_k"),"stoch_d":btc_mm.get("stoch_d"),"ema_bullish":btc_mm.get("ema_bullish"),"daily_breakout":btc_mm.get("daily_breakout"),"weekly_breakout":btc_mm.get("weekly_breakout"),"technical_score":technical_score(btc_mm,btc_wrsi,0,np.nan,len(btc_valid)/6*100),"dominance_pct":dom["current"],"dominance_change_1d":dom["change_1d"],"dominance_change_7d":dom["change_7d"],"dominance_trend":dom["trend"]}
+    btc_payload={"signal":btc_signal,"price_change_24h":btc24,"price_change_7d":btc7,"weighted_rsi":btc_wrsi,"rsi_valid_timeframes":len(btc_valid),"rsi_quality_pct":len(btc_valid)/6*100,"rsi_source":btc_rsi_source,"adx":btc_mm.get("adx"),"plus_di":btc_mm.get("pdi"),"minus_di":btc_mm.get("mdi"),"stoch_k":btc_mm.get("stoch_k"),"stoch_d":btc_mm.get("stoch_d"),"ema_bullish":btc_mm.get("ema_bullish"),"daily_breakout":btc_mm.get("daily_breakout"),"weekly_breakout":btc_mm.get("weekly_breakout"),"technical_score":technical_score(btc_mm,btc_wrsi,0,np.nan,len(btc_valid)/6*100),"dominance_pct":dom["current"],"dominance_change_1d":dom["change_1d"],"dominance_change_7d":dom["change_7d"],"dominance_trend":dom["trend"],"total3_btc_ratio":t3["ratio"],"total3_btc_change_1d_pct":t3["change_1d_pct"],"total3_btc_change_7d_pct":t3["change_7d_pct"],"total3_btc_trend":t3["trend"]}
     payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"btc_dominance_pct":dom["current"],"btc_dominance_change_1d":dom["change_1d"],"btc_dominance_change_7d":dom["change_7d"],"btc_dominance_trend":dom["trend"],"candidate_count":len(c),"pre_screen_count":len(pre),"ranked_count":len(out),"exchange":primary_exchange,"data_quality":quality_counts},"btc_market":btc_payload,"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
     os.makedirs("data",exist_ok=True); open("data/latest_scan.json","w",encoding="utf-8").write(json.dumps(payload,indent=2,default=str))
 
     statefile="data/telegram_alert_state.json"; state=json.load(open(statefile,encoding="utf-8")) if os.path.exists(statefile) else {"keys":[]}; keys=set(state.get("keys",[])); sent=0
-    btc_key=f"{now[:10]}|{VERSION}|BTC|{btc_signal}|{dom['trend']}"
+    btc_key=f"{now[:10]}|{VERSION}|BTC|{btc_signal}|{dom['trend']}|{t3['trend']}"
     if btc_key not in keys:
         missing_btc=[tf for tf in WEIGHTS if pd.isna(btc_vals.get(tf))]
         fmt=lambda x: "N/A" if pd.isna(x) else f"{x:.2f}"
@@ -301,7 +342,7 @@ def main():
             missing=[tf for tf in WEIGHTS if pd.isna(r.get("rsi_"+tf.lower()))]
             msg=(f"{sig}\n\n{r['coin']} ({r['ticker']})\nTechnical score: {score:.1f}\nWeighted RSI: {r['weighted_rsi'] if r['weighted_rsi'] is not None else 'N/A'}\n"
                  f"BTC market direction: {btc_signal}\nBTC 24h/7d: {btc24:.2f}% / {btc7:.2f}%\nBTC dominance: {dom['current']:.2f}% ({dom['trend']})\n"
-                 f"BTC dominance 1D/7D: {dom['change_1d']:.2f}pp / {dom['change_7d']:.2f}pp\nBTC-relative 7D: {r['btc_rel_7d_pct']:.2f}%\nVol/MCap: {r['vol_mcap_pct']:.2f}%\nADX: {r['adx'] if r['adx'] is not None else 'N/A'}\n"
+                 f"BTC dominance 1D/7D: {dom['change_1d']:.2f}pp / {dom['change_7d']:.2f}pp\nTOTAL3/BTC: {t3['ratio']:.6f} ({t3['trend']})\nTOTAL3/BTC 1D/7D: {t3['change_1d_pct']:.2f}% / {t3['change_7d_pct']:.2f}%\nBTC-relative 7D: {r['btc_rel_7d_pct']:.2f}%\nVol/MCap: {r['vol_mcap_pct']:.2f}%\nADX: {r['adx'] if r['adx'] is not None else 'N/A'}\n"
                  f"\nDATA_QUALITY\nRSI coverage: {r['rsi_valid_timeframes']}/6 ({r['rsi_quality_pct']:.0f}%)\nRSI source: {r['rsi_source']}\nMissing RSI: {', '.join(missing) if missing else 'None'}\n\nRegime: {regime}")
             ok,err=telegram(msg)
             if ok:keys.add(key); sent+=1
