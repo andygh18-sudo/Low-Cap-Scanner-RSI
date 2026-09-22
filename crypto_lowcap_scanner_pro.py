@@ -1159,7 +1159,7 @@ def btc_market_context(exchange_name):
         return None
 
 st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8 Scanner")
-st.caption("v8: cached multi-layer market analysis + 50–100 candidate pre-screen + structural breakout state machine")
+st.caption("v8.3: fast pre-screen + deep technical breakout engine + cached exchange resources")
 
 # Show the latest GitHub Actions background result if available.
 try:
@@ -1183,14 +1183,15 @@ with st.sidebar:
     maxcap=st.number_input("Max market cap ($M)", min_value=50.0, max_value=2000.0, value=500.0, step=25.0, format="%.1f", key="v8_maxcap")
     minvol=st.number_input("Min 24h volume ($M)", min_value=0.5, max_value=500.0, value=2.0, step=0.5, format="%.1f", key="v8_minvol")
     minvr=st.number_input("Min volume / market cap (%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0, format="%.1f", key="v8_minvr")
-    preselect=st.slider("Technical pre-screen size", min_value=50, max_value=100, value=60, step=10, key="v8_preselect")
+    preselect=st.slider("Fast pre-screen size", min_value=50, max_value=100, value=60, step=10, key="v8_preselect")
+    deep_count=st.slider("Deep technical analysis", min_value=10, max_value=25, value=15, step=5, key="v8_deep_count")
     exchange=st.selectbox("Exchange candles",["bybit","okx","kraken"],index=0, key="v8_exchange")
     run=st.button("🚀 Run full scanner",type="primary", key="v8_run")
     st.caption("The dashboard loads the latest GitHub Actions scan by default. Run the live technical engine only when you need fresh exchange candles.")
     st.caption("v8 analyses a broad pre-screen before applying the expensive structural breakout engine. ZEN is always retained.")
 
 st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8")
-st.caption("Cached technical engine + 50–100 pre-screen + breakout lifecycle + supply quality + downside resilience")
+st.caption("v8.3 two-stage engine: 50–100 fast candidates → 10–25 deep technical candidates")
 
 if "run" not in st.session_state: st.session_state.run=False
 if run or st.session_state.run:
@@ -1234,21 +1235,40 @@ if run or st.session_state.run:
         view.columns=["Coin","Ticker","MCap $M","Vol $M","Vol/MCap %","24h %","7d %","BTC-rel 7d %","Pre-screen score"]
         st.dataframe(view.round(2),use_container_width=True,hide_index=True)
 
-        # One analysis bundle per pre-screen coin. Streamlit now persists the
-        # complete bundle for 5 minutes, including the expensive CCXT-derived
-        # indicators. This prevents every widget interaction from rebuilding
-        # all 50–100 bundles.
+        # -------------------------- TWO-STAGE ENGINE --------------------------
+        # Stage 1 is intentionally API-light: the CoinGecko universe has already
+        # supplied momentum/liquidity/BTC-relative data. Only the strongest
+        # candidates proceed to the expensive exchange/derivatives engine.
+        presel["fast_score"] = (
+            presel["base_score"]
+            + np.clip((presel["price_change_percentage_24h"] + 5) * 0.4, 0, 10)
+            + np.clip((presel["btc_rel_7d"] + 5) * 0.2, 0, 5)
+        )
+        deep=presel.sort_values("fast_score", ascending=False).head(int(deep_count)).copy()
+        if not zen.empty and str(zen.iloc[0]["id"]) not in set(deep["id"]):
+            deep=pd.concat([deep,zen],ignore_index=True).drop_duplicates("id")
+        st.subheader("⚡ Stage 1 — Fast pre-screen")
+        fast_view=presel[["name","symbol","mcap_m","vol_m","vr","price_change_percentage_24h",
+                          "price_change_percentage_7d_in_currency","btc_rel_7d","fast_score"]].copy()
+        fast_view.columns=["Coin","Ticker","MCap $M","Vol $M","Vol/MCap %","24h %","7d %",
+                           "BTC-rel 7d %","Fast score"]
+        st.dataframe(fast_view.round(2),use_container_width=True,hide_index=True)
+        st.caption(f"Stage 1 evaluated {len(presel)} candidates using cached CoinGecko market data. Stage 2 will deeply analyse {len(deep)} candidates.")
+
+        # Stage 2: only the strongest candidates get CCXT candles, MTF RSI,
+        # ADX/DMI, StochRSI, OI/funding, downside resilience and full breakout metrics.
         bundles={}
-        progress=st.progress(0,text="Building technical bundles (first run only)…")
-        total=max(1,len(presel))
-        for i,(_,x) in enumerate(presel.iterrows(),1):
+        progress=st.progress(0,text="Building deep technical bundles…")
+        total=max(1,len(deep))
+        for i,(_,x) in enumerate(deep.iterrows(),1):
             bundles[str(x["id"])] = analysis_bundle(exchange, x.to_dict())
-            progress.progress(i/total,text=f"Analysing {i}/{total}: {str(x['symbol']).upper()}")
+            progress.progress(i/total,text=f"Deep analysis {i}/{total}: {str(x['symbol']).upper()}")
         progress.empty()
 
-        # Build RSI heatmap from the same cached values used by final scoring.
+        # RSI heatmap is now focused on the deep-analysis set rather than
+        # forcing 50–100 expensive MTF calculations.
         rows=[]
-        for _,x in presel.iterrows():
+        for _,x in deep.iterrows():
             b=bundles[str(x.id)]; vals=b["rsi"]; row={"Coin":x["name"],"Ticker":str(x["symbol"]).upper(),**vals,"Weighted RSI":b["weighted_rsi"]}
             row["Deep oversold"]=sum(pd.notna(v) and v<30 for v in vals.values())>=2
             row["Bullish alignment"]=sum(pd.notna(v) and v>=60 for v in vals.values())>=4
@@ -1275,7 +1295,7 @@ if run or st.session_state.run:
         r1,r2,r3=st.columns(3); r1.metric("Regime",regime); r2.metric("Low-cap breadth",f"{breadth:.0f}%"); r3.metric("Regime score",regime_score)
 
         final=[]
-        for _,x in presel.iterrows():
+        for _,x in deep.iterrows():
             b=bundles[str(x.id)]; m=dict(b["metrics"]); m["vr"]=float(x["vr"]); rs=b["weighted_rsi"]; sk=b["stoch_k"]; sd=b["stoch_d"]; av=b["adx"]; pdi=b["pdi"]; mdi=b["mdi"]; ap=b["adx_prev"]; btc_rel=float(x["btc_rel_7d"]); base=b["base"]; supply=b["supply"]; der=b["deriv"]
             m.update({"btc_down_day_rel_pct":b["down_rel"]})
             tech=technical_score_v8(m,rs,btc_rel,base,supply,b["down_rel"],b["down_hit"])
@@ -1318,7 +1338,7 @@ if run or st.session_state.run:
                 st.caption(f"Telegram alerts: {tg_result.get('sent',0)} new alert(s), {tg_result.get('skipped',0)} duplicate(s) suppressed.")
         else:
             st.caption("Telegram alerts are disabled until TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are configured.")
-        st.subheader("TRUE BREAKOUT PRO v8 — final ranking")
+        st.subheader("TRUE BREAKOUT PRO v8.3 — Deep ranking")
         st.dataframe(finaldf.round(2),use_container_width=True,hide_index=True)
 
         # Focus table: strongest structural candidates only.
@@ -1326,11 +1346,11 @@ if run or st.session_state.run:
         st.subheader("⭐ Breakout focus")
         st.dataframe(focus.round(2),use_container_width=True,hide_index=True)
 
-        st.subheader("v8 architecture / rules")
+        st.subheader("v8.3 architecture / rules")
         st.markdown("""
-**1. Data cache:** one CCXT exchange instance and one OHLCV dataset per exchange/symbol/timeframe are reused across all indicators.
+**1. Two-stage engine:** Stage 1 ranks 50–100 candidates using market-data momentum/liquidity; Stage 2 deeply analyses only the top 10–25.
 
-**2. Broad pre-screen:** 50–100 candidates are analysed before the expensive structural breakout engine; ZEN is always retained.
+**2. Broad pre-screen:** 50–100 candidates enter Stage 1; ZEN is always retained. Only the deep subset reaches the expensive structural engine.
 
 **3. Clean scoring:** Technical Quality is 0–100; Regime Score and Risk-Adjusted Score are separate.
 
@@ -1346,7 +1366,7 @@ if run or st.session_state.run:
 
 **9. Downside resilience:** BTC-down-day beta, average relative performance and outperform rate are timestamp-aligned.
 
-**10. Data reuse:** RSI, StochRSI, ADX, OHLCV, derivatives and downside-resilience results are reused rather than recomputed in separate dashboard sections.
+**10. Data reuse:** deep RSI, StochRSI, ADX, OHLCV, derivatives and downside-resilience results are cached and reused across the deep ranking and heatmap.
         """)
         st.caption("v8 is a research/ranking engine. It does not execute trades or guarantee outcomes.")
     except Exception as e:
