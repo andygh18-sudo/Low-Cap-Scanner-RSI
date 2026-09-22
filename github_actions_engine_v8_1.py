@@ -359,7 +359,7 @@ def main():
     os.makedirs("data",exist_ok=True); open("data/latest_scan.json","w",encoding="utf-8").write(json.dumps(payload,indent=2,default=str))
 
     statefile="data/telegram_alert_state.json"; state=json.load(open(statefile,encoding="utf-8")) if os.path.exists(statefile) else {"keys":[]}; keys=set(state.get("keys",[])); sent=0
-    btc_key=f"{now[:10]}|{VERSION}|BTC|{btc_signal}|{dom['trend']}|{t3['trend']}"
+    btc_key=f"{now[:13]}|{VERSION}|BTC|{btc_signal}|{dom['trend']}|{ctx['usdt_dominance_trend']}|{t3['trend']}|{fg['classification']}"
     if btc_key not in keys:
         missing_btc=[tf for tf in WEIGHTS if pd.isna(btc_vals.get(tf))]
         fmt=lambda x: "N/A" if pd.isna(x) else f"{x:.2f}"
