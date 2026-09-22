@@ -347,6 +347,7 @@ def main():
                  f"\n₿ BTC DOMINANCE: {fmt(dom['current'])}%\n{dom['trend']}\n"
                  f"Dominance 1D: {fmt(dom['change_1d'])} percentage points\nDominance 7D: {fmt(dom['change_7d'])} percentage points\n"
                  f"\n📊 TOTAL3/BTC: {fmt(t3['ratio'])}\n{t3['trend']}\nTOTAL3/BTC 1D: {fmt(t3['change_1d_pct'])}%\nTOTAL3/BTC 7D: {fmt(t3['change_7d_pct'])}%\n"
+                 f"\n😨 FEAR & GREED: {fmt(fg['value'])} — {fg['classification']}\nFear & Greed 1D change: {fmt(fg['change_1d'])}\nSource: Alternative.me\n"
                  f"\nALTCOIN BREADTH: {breadth:.1f}%\nOVERALL REGIME: {regime}\nMissing RSI: {', '.join(missing_btc) if missing_btc else 'None'}")
         ok,err=telegram(btc_msg)
         if ok: keys.add(btc_key); sent+=1
