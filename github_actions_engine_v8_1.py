@@ -37,31 +37,83 @@ def markets():
         print(f"ZEN direct fetch failed: {type(e).__name__}: {e}")
     return pd.concat(frames,ignore_index=True).drop_duplicates("id")
 
-def btc_dominance():
-    current=np.nan; d1=np.nan; d7=np.nan
+def market_context():
+    """Return current BTC dominance and TOTAL3/BTC, plus changes from persisted hourly history.
+    This avoids relying on a historical global-chart endpoint that may be unavailable on the API plan.
+    """
+    btc_dom=np.nan; eth_dom=np.nan; ratio=np.nan
     try:
-        g=cg_get("global")
-        current=float(g.get("data",{}).get("market_cap_percentage",{}).get("btc",np.nan))
+        g=cg_get("global").get("data",{})
+        pct=g.get("market_cap_percentage",{}) or {}
+        btc_dom=float(pct.get("btc",pct.get("bitcoin",np.nan)))
+        eth_dom=float(pct.get("eth",pct.get("ethereum",np.nan)))
+        if pd.notna(btc_dom) and btc_dom>0 and pd.notna(eth_dom):
+            ratio=(100.0-btc_dom-eth_dom)/btc_dom
     except Exception as e:
-        print(f"BTC dominance current failed: {type(e).__name__}: {e}")
-    # CoinGecko global market-cap history includes historical BTC dominance.
+        print(f"Market context current failed: {type(e).__name__}: {e}")
+
+    history_file="data/market_context_history.json"
+    history=[]
     try:
-        h=cg_get("global/market_cap_chart",{"vs_currency":"usd","days":"7"})
-        pct=h.get("market_cap_percentage",{})
-        btc_hist=pct.get("btc") or pct.get("bitcoin") or []
-        if btc_hist:
-            vals=pd.Series([float(x[1]) for x in btc_hist if len(x)>=2])
-            if len(vals):
-                d1=float(vals.iloc[-1]-vals.iloc[max(0,len(vals)-24*1)-1]) if len(vals)>24 else float(vals.iloc[-1]-vals.iloc[0])
-                d7=float(vals.iloc[-1]-vals.iloc[0])
-                current=float(vals.iloc[-1]) if pd.isna(current) else current
+        if os.path.exists(history_file):
+            history=json.load(open(history_file,encoding="utf-8"))
+            if not isinstance(history,list): history=[]
+    except Exception:
+        history=[]
+
+    now=datetime.now(timezone.utc)
+    history=[x for x in history if isinstance(x,dict) and x.get("ts")]
+    if pd.notna(btc_dom) or pd.notna(ratio):
+        history.append({"ts":now.isoformat(),"btc_dominance_pct":btc_dom,"total3_btc_ratio":ratio})
+    # Keep 14 days of hourly context.
+    cutoff=now-pd.Timedelta(days=14)
+    cleaned=[]
+    for x in history:
+        try:
+            ts=pd.to_datetime(x["ts"],utc=True)
+            if ts>=cutoff: cleaned.append(x)
+        except Exception: pass
+    history=cleaned[-500:]
+    os.makedirs("data",exist_ok=True)
+    try:
+        open(history_file,"w",encoding="utf-8").write(json.dumps(history,indent=2,default=str))
     except Exception as e:
-        print(f"BTC dominance history failed: {type(e).__name__}: {e}")
-    if pd.isna(current): return {"current":np.nan,"change_1d":np.nan,"change_7d":np.nan,"trend":"N/A"}
-    if pd.notna(d7) and d7>=0.50: trend="📈 BTC DOMINANCE RISING"
-    elif pd.notna(d7) and d7<=-0.50: trend="📉 BTC DOMINANCE FALLING"
-    else: trend="➡️ BTC DOMINANCE FLAT"
-    return {"current":current,"change_1d":d1,"change_7d":d7,"trend":trend}
+        print(f"Market context history write failed: {type(e).__name__}: {e}")
+
+    def prior(field,days):
+        target=now-pd.Timedelta(days=days)
+        best=None; dist=None
+        for x in history:
+            try:
+                ts=pd.to_datetime(x["ts"],utc=True)
+                v=float(x.get(field,np.nan))
+                if pd.isna(v): continue
+                d=abs((ts-target).total_seconds())
+                if dist is None or d<dist:
+                    dist=d; best=v
+            except Exception: pass
+        # Require a reasonably close historical observation.
+        return best if dist is not None and dist<=days*24*3600*0.50 else np.nan
+
+    dom1=prior("btc_dominance_pct",1)
+    dom7=prior("btc_dominance_pct",7)
+    t31=prior("total3_btc_ratio",1)
+    t37=prior("total3_btc_ratio",7)
+    dom_d1=btc_dom-dom1 if pd.notna(btc_dom) and pd.notna(dom1) else np.nan
+    dom_d7=btc_dom-dom7 if pd.notna(btc_dom) and pd.notna(dom7) else np.nan
+    t3_d1=(ratio/t31-1)*100 if pd.notna(ratio) and pd.notna(t31) and t31 else np.nan
+    t3_d7=(ratio/t37-1)*100 if pd.notna(ratio) and pd.notna(t37) and t37 else np.nan
+
+    if pd.notna(dom_d7) and dom_d7>=0.50: dom_trend="📈 BTC DOMINANCE RISING"
+    elif pd.notna(dom_d7) and dom_d7<=-0.50: dom_trend="📉 BTC DOMINANCE FALLING"
+    else: dom_trend="➡️ BTC DOMINANCE FLAT" if pd.notna(dom_d7) else "⏳ BTC DOMINANCE HISTORY BUILDING"
+
+    if pd.notna(t3_d7) and t3_d7>=5: t3_trend="📈 TOTAL3/BTC RISING"
+    elif pd.notna(t3_d7) and t3_d7<=-5: t3_trend="📉 TOTAL3/BTC FALLING"
+    else: t3_trend="➡️ TOTAL3/BTC FLAT" if pd.notna(t3_d7) else "⏳ TOTAL3/BTC HISTORY BUILDING"
+
+    return {"dominance_pct":btc_dom,"dominance_change_1d":dom_d1,"dominance_change_7d":dom_d7,"dominance_trend":dom_trend,
+            "total3_btc_ratio":ratio,"total3_btc_change_1d_pct":t3_d1,"total3_btc_change_7d_pct":t3_d7,"total3_btc_trend":t3_trend}
 
 def fear_greed():
     """Fetch the latest Crypto Fear & Greed Index from Alternative.me."""
@@ -76,46 +128,6 @@ def fear_greed():
     except Exception as e:
         print(f"Fear & Greed failed: {type(e).__name__}: {e}")
         return {"value":np.nan,"classification":"N/A","change_1d":np.nan,"timestamp":None}
-
-def total3_btc():
-    """Estimate TOTAL3/BTC from CoinGecko global market-cap history.
-    TOTAL3 = total crypto market cap - BTC market cap - ETH market cap.
-    Ratio = TOTAL3 market cap / BTC market cap.
-    """
-    ratio=np.nan; d1=np.nan; d7=np.nan
-    try:
-        h=cg_get("global/market_cap_chart",{"vs_currency":"usd","days":"7"})
-        total_hist=h.get("market_cap",[]) or h.get("market_caps",[])
-        pct=h.get("market_cap_percentage",{})
-        btc_pct=pct.get("btc") or pct.get("bitcoin") or []
-        eth_pct=pct.get("eth") or pct.get("ethereum") or []
-        if total_hist and btc_pct and eth_pct:
-            total=pd.DataFrame(total_hist,columns=["ts","total"]).drop_duplicates("ts").sort_values("ts")
-            bp=pd.DataFrame(btc_pct,columns=["ts","btc_pct"]).drop_duplicates("ts").sort_values("ts")
-            ep=pd.DataFrame(eth_pct,columns=["ts","eth_pct"]).drop_duplicates("ts").sort_values("ts")
-            z=total.merge(bp,on="ts",how="inner").merge(ep,on="ts",how="inner")
-            if len(z)>=2:
-                z["btc_mcap"]=z["total"]*z["btc_pct"]/100.0
-                z["total3"]=z["total"]*(1.0-(z["btc_pct"]+z["eth_pct"])/100.0)
-                z["ratio"]=z["total3"]/z["btc_mcap"].replace(0,np.nan)
-                z=z.replace([np.inf,-np.inf],np.nan).dropna(subset=["ratio"])
-                if len(z):
-                    ratio=float(z.iloc[-1].ratio)
-                    end_ts=pd.to_datetime(z.iloc[-1].ts,unit="ms",utc=True)
-                    target1=end_ts-pd.Timedelta(days=1)
-                    target7=end_ts-pd.Timedelta(days=7)
-                    i1=(pd.to_datetime(z.ts,unit="ms",utc=True)-target1).abs().idxmin()
-                    i7=(pd.to_datetime(z.ts,unit="ms",utc=True)-target7).abs().idxmin()
-                    r1=float(z.loc[i1,"ratio"]); r7=float(z.loc[i7,"ratio"])
-                    d1=(ratio/r1-1)*100 if r1 else np.nan
-                    d7=(ratio/r7-1)*100 if r7 else np.nan
-    except Exception as e:
-        print(f"TOTAL3/BTC failed: {type(e).__name__}: {e}")
-    if pd.isna(ratio): return {"ratio":np.nan,"change_1d_pct":np.nan,"change_7d_pct":np.nan,"trend":"N/A"}
-    if pd.notna(d7) and d7>=5: trend="📈 TOTAL3/BTC RISING"
-    elif pd.notna(d7) and d7<=-5: trend="📉 TOTAL3/BTC FALLING"
-    else: trend="➡️ TOTAL3/BTC FLAT"
-    return {"ratio":ratio,"change_1d_pct":d1,"change_7d_pct":d7,"trend":trend}
 
 def exchange(name):
     k=f"ex:{name}"
