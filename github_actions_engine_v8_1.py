@@ -348,6 +348,6 @@ def main():
             if ok:keys.add(key); sent+=1
             else: print("Telegram:",err)
     state["keys"]=list(keys)[-1000:]; open(statefile,"w",encoding="utf-8").write(json.dumps(state,indent=2))
-    print(f"{VERSION} scan complete | candidates={len(c)} pre_screen={len(pre)} primary_exchange={primary_exchange} regime={regime} btc={btc_signal} btc_dom={dom['current']}% {dom['trend']} telegram_sent={sent}")
+    print(f"{VERSION} scan complete | candidates={len(c)} pre_screen={len(pre)} primary_exchange={primary_exchange} regime={regime} btc={btc_signal} btc_dom={dom['current']}% {dom['trend']} total3btc={t3['ratio']} {t3['trend']} telegram_sent={sent}")
 
 if __name__=="__main__": main()
