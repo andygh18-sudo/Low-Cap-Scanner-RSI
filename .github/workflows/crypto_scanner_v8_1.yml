@@ -3,7 +3,7 @@ name: Crypto Low-Cap Scanner v8.2.5
 on:
   workflow_dispatch:
   schedule:
-    - cron: "7 * * * *"
+    - cron: "17 * * * *"
       timezone: "Europe/London"
 
 permissions:
