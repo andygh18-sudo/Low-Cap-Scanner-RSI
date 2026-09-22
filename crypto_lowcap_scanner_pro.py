@@ -1280,7 +1280,9 @@ _rsi14_selected=st.selectbox(
     key="deep_rsi14_coin_select",
     help="Select a coin to view its daily RSI-14 from completed exchange candles."
 )
-\nif _bg:\n    _meta=_bg.get("meta",{}) or {}
+
+if _bg:
+    _meta=_bg.get("meta",{}) or {}
     _btc=_bg.get("btc_market",{}) or {}
     _age=_background_age_minutes(_meta.get("generated_at"))
     _fresh="🟢 FRESH" if pd.notna(_age) and _age<=90 else ("🟡 AGING" if pd.notna(_age) and _age<=240 else "🔴 STALE")
