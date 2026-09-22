@@ -1,20 +1,32 @@
 [
   {
+    "id": "sei-network",
+    "ticker": "SEI",
+    "score": 87.1,
+    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+  },
+  {
     "id": "fetch-ai",
     "ticker": "FET",
-    "score": 86.2,
+    "score": 86.3,
+    "signal": "\ud83d\ude80 TRUE BREAKOUT"
+  },
+  {
+    "id": "fartcoin",
+    "ticker": "FARTCOIN",
+    "score": 84.6,
+    "signal": "\ud83d\ude80 TRUE BREAKOUT"
+  },
+  {
+    "id": "four",
+    "ticker": "FORM",
+    "score": 83.3,
     "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
   },
   {
-    "id": "bonk",
-    "ticker": "BONK",
-    "score": 84.1,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
-  },
-  {
-    "id": "optimism",
-    "ticker": "OP",
-    "score": 82.5,
-    "signal": "\ud83d\udcaa RELATIVE-STRENGTH LEADER"
+    "id": "thorchain",
+    "ticker": "RUNE",
+    "score": 82.7,
+    "signal": "\ud83d\ude80 TRUE BREAKOUT"
   }
 ]
