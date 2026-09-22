@@ -255,7 +255,7 @@ def main():
     os.makedirs("data",exist_ok=True); open("data/latest_scan.json","w",encoding="utf-8").write(json.dumps(payload,indent=2,default=str))
     statefile="data/telegram_alert_state.json"; state=json.load(open(statefile,encoding="utf-8")) if os.path.exists(statefile) else {"keys":[]}; keys=set(state.get("keys",[])); sent=0
     for r in out.to_dict("records"):
-        sig=r["breakout_state"]; score=float(r.get("technical_score") or 0); key=f"{now[:10]}|{r['ticker']}|{sig}"
+        sig=r["breakout_state"]; score=float(r.get("technical_score") or 0); key=f"{now[:10]}|{VERSION}|{r['ticker']}|{sig}"
         if ("BREAKOUT" in sig or "RETEST" in sig) and (score>=70 or r["ticker"]=="ZEN") and key not in keys:
             missing=[tf for tf in WEIGHTS if pd.isna(r.get("rsi_"+tf.lower()))]
             msg=f"{sig}\n\n{r['coin']} ({r['ticker']})\nTechnical score: {score:.1f}\nWeighted RSI: {r['weighted_rsi'] if r['weighted_rsi'] is not None else 'N/A'}\nBTC-relative 7D: {r['btc_rel_7d_pct']:.2f}%\nVol/MCap: {r['vol_mcap_pct']:.2f}%\nADX: {r['adx'] if r['adx'] is not None else 'N/A'}\n\nDATA_QUALITY\nRSI coverage: {r['rsi_valid_timeframes']}/6 ({r['rsi_quality_pct']:.0f}%)\nRSI source: {r['rsi_source']}\nMissing RSI: {', '.join(missing) if missing else 'None'}\n\nRegime: {regime} | BTC 24h: {btc24:.2f}% | BTC 7d: {btc7:.2f}%"
