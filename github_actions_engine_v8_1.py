@@ -269,6 +269,41 @@ def technical_score(m,wrsi,rel,downhit,rsi_quality=100):
     raw=float(np.clip(s/96*100,0,100)); quality_factor=0.70+0.30*float(np.clip(rsi_quality,0,100))/100.0
     return float(np.clip(raw*quality_factor,0,100))
 
+def breakout_confidence_bg(m, wrsi, btc_rel, vol_mcap, rsi_quality):
+    """0-100 breakout confirmation score for persisted background results."""
+    score=0.0
+    checks=[
+        (12,m.get("daily_breakout")),(8,m.get("weekly_breakout")),
+        (8,m.get("volume_confirmed")),(8,m.get("obv_breakout")),
+        (5,m.get("close_near_high")),(8,pd.notna(m.get("atr_distance")) and m.get("atr_distance",-999)>=.25),
+        (5,m.get("atr_expanding")),(6,m.get("ema_bullish")),(3,m.get("ema200_bullish")),
+        (5,m.get("cmf_bullish")),(4,m.get("mfi_bullish")),(5,m.get("macd_accelerating")),
+        (5,m.get("bb_expanding")),(4,m.get("breakout_accepted")),(7,m.get("retest_held")),
+        (4,m.get("rvol_accelerating"))]
+    for pts,ok in checks:
+        if bool(ok): score+=pts
+    if pd.notna(vol_mcap) and vol_mcap>=10: score+=3
+    adx=m.get("adx"); pdi=m.get("pdi"); mdi=m.get("mdi"); prev=m.get("adx_prev")
+    if pd.notna(adx) and adx>=25 and pd.notna(pdi) and pd.notna(mdi) and pdi-mdi>=5: score+=4
+    if pd.notna(adx) and pd.notna(prev) and adx>prev: score+=3
+    if pd.notna(m.get("stoch_k")) and pd.notna(m.get("stoch_d")) and m["stoch_k"]>m["stoch_d"]: score+=2
+    if pd.notna(m.get("stoch_k")) and m["stoch_k"]>=50: score+=1
+    if pd.notna(wrsi) and 45<=wrsi<75: score+=2
+    if pd.notna(btc_rel) and btc_rel>=5: score+=3
+    if pd.notna(btc_rel) and btc_rel>=10: score+=2
+    if pd.notna(rsi_quality): score*=float(np.clip(rsi_quality/100,0,1))
+    return float(np.clip(score,0,100))
+
+def risk_adjusted_score_bg(technical, beta, down_rel, down_hit, rsi_quality):
+    """Adjust technical score using downside resilience and RSI data quality."""
+    if not pd.notna(technical): return np.nan
+    mult=1.0
+    if pd.notna(beta): mult*=float(np.clip(1.10-0.15*max(0.0,beta-1.0),0.70,1.10))
+    if pd.notna(down_rel): mult*=float(np.clip(1.0+down_rel/50.0,0.85,1.10))
+    if pd.notna(down_hit): mult*=float(np.clip(0.90+down_hit/500.0,0.90,1.10))
+    if pd.notna(rsi_quality) and rsi_quality<100: mult*=float(np.clip(0.90+rsi_quality/1000.0,0.90,1.0))
+    return float(np.clip(technical*mult,0,100))
+
 def true_breakout(m,vr,wrsi,rel):
     return bool(m.get("daily_breakout") and m.get("weekly_breakout") and m.get("volume_confirmed") and m.get("close_near_high") and pd.notna(m.get("atr_distance")) and m["atr_distance"]>=.25 and m.get("atr_expanding") and m.get("obv_breakout") and rel>=5 and vr>=10 and pd.notna(wrsi) and wrsi<75 and pd.notna(m.get("stoch_k")) and pd.notna(m.get("stoch_d")) and m["stoch_k"]>=50 and m["stoch_k"]>m["stoch_d"] and pd.notna(m.get("adx")) and m["adx"]>=25 and m["adx"]>m.get("adx_prev",-np.inf) and pd.notna(m.get("pdi")) and pd.notna(m.get("mdi")) and m["pdi"]-m["mdi"]>=5 and m.get("ema_bullish"))
 
@@ -338,7 +373,7 @@ def main():
                 e=exchange(name); s=symbol(e,t)
                 if s: mm=metrics(ohlcv(e,s,"1d",100),ohlcv(e,s,"1w",80)); source=name.upper(); break
             except Exception: continue
-        beta,downrel,downhit=downside(ex,t); tech=technical_score(mm,wr,float(x.btc_rel_7d),downhit,rsi_quality); tb=true_breakout(mm,float(x.vr),wr,float(x.btc_rel_7d))
+        beta,downrel,downhit=downside(ex,t); tech=technical_score(mm,wr,float(x.btc_rel_7d),downhit,rsi_quality); confidence=breakout_confidence_bg(mm,wr,float(x.btc_rel_7d),float(x.vr),rsi_quality); risk_adj=risk_adjusted_score_bg(tech,beta,downrel,downhit,rsi_quality); tb=true_breakout(mm,float(x.vr),wr,float(x.btc_rel_7d))
         if rsi_quality < 50:sig="⚠️ DATA QUALITY WARNING"
         elif mm.get("breakout_failed"):sig="🚨 BREAKOUT FAILED"
         elif tb and wr<80:sig="🚀 TRUE BREAKOUT"
@@ -348,7 +383,7 @@ def main():
         elif tech>=70:sig="🟢 STRONG SETUP"
         else:sig="⚪ BASE / PRE-BREAKOUT"
         rows.append({"coin":x["name"],"ticker":t,"id":x["id"],"market_cap_m":float(x.mcap_m),"volume_m":float(x.vol_m),"vol_mcap_pct":float(x.vr),"change_24h_pct":float(x.price_change_percentage_24h),"change_7d_pct":float(x.price_change_percentage_7d_in_currency),"btc_rel_7d_pct":float(x.btc_rel_7d),
-                     "rsi_1h":vals["1H"],"rsi_4h":vals["4H"],"rsi_1d":vals["1D"],"rsi_1w":vals["1W"],"rsi_1m":vals["1M"],"rsi_3m":vals["3M"],"weighted_rsi":wr,"rsi_valid_timeframes":len(valid_tfs),"rsi_quality_pct":rsi_quality,"rsi_source":rsi_source,"downside_beta":beta,"btc_down_day_rel_pct":downrel,"btc_down_day_outperform_pct":downhit,"technical_score":tech,"true_breakout":tb,"breakout_state":sig,"breakout_exchange":source,"breakout_pct":mm.get("breakout_distance_pct"),"breakout_volume_ratio":mm.get("volume_ratio"),"adx":mm.get("adx"),"plus_di":mm.get("pdi"),"minus_di":mm.get("mdi"),"stoch_k":mm.get("stoch_k"),"stoch_d":mm.get("stoch_d")})
+                     "rsi_1h":vals["1H"],"rsi_4h":vals["4H"],"rsi_1d":vals["1D"],"rsi_1w":vals["1W"],"rsi_1m":vals["1M"],"rsi_3m":vals["3M"],"weighted_rsi":wr,"rsi_valid_timeframes":len(valid_tfs),"rsi_quality_pct":rsi_quality,"rsi_source":rsi_source,"downside_beta":beta,"btc_down_day_rel_pct":downrel,"btc_down_day_outperform_pct":downhit,"technical_score":tech,"risk_adjusted_score":risk_adj,"breakout_confidence":confidence,"true_breakout":tb,"breakout_state":sig,"breakout_exchange":source,"breakout_pct":mm.get("breakout_distance_pct"),"breakout_volume_ratio":mm.get("volume_ratio"),"adx":mm.get("adx"),"plus_di":mm.get("pdi"),"minus_di":mm.get("mdi"),"stoch_k":mm.get("stoch_k"),"stoch_d":mm.get("stoch_d")})
     out=pd.DataFrame(rows).sort_values(["true_breakout","technical_score"],ascending=[False,False])
     breadth=float((c.price_change_percentage_24h>0).mean()*100)
     regime="RISK-ON" if btc24>2 and btc7>3 and breadth>=55 else ("RISK-OFF" if btc24<-3 and btc7<-5 and breadth<35 else "MIXED / TRANSITION")
