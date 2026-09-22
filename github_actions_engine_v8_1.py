@@ -7,7 +7,6 @@ import ccxt
 
 VERSION = "v8.2.5"
 CG = "https://api.coingecko.com/api/v3"
-ZEN_ID = "horizen"
 WEIGHTS = {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}
 CACHE = {}
 
@@ -31,8 +30,6 @@ def markets():
     for page in (1,2):
         frames.append(pd.DataFrame(cg_get("coins/markets", {"vs_currency":"usd","order":"market_cap_desc","per_page":250,"page":page,"sparkline":"false","price_change_percentage":"24h,7d"})))
     try:
-        zen=pd.DataFrame(cg_get("coins/markets", {"vs_currency":"usd","ids":ZEN_ID,"sparkline":"false","price_change_percentage":"24h,7d"}))
-        if not zen.empty: frames.append(zen)
     except Exception as e:
         print(f"ZEN direct fetch failed: {type(e).__name__}: {e}")
     return pd.concat(frames,ignore_index=True).drop_duplicates("id")
@@ -339,12 +336,9 @@ def main():
     t3={"ratio":ctx["total3_btc_ratio"],"change_1d_pct":ctx["total3_btc_change_1d_pct"],"change_7d_pct":ctx["total3_btc_change_7d_pct"],"trend":ctx["total3_btc_trend"]}
     fg=fear_greed()
     stable={"tether","usd-coin","dai","usds","true-usd","usdd"}; c=df[df.mcap_m.between(20,500)&(df.vol_m>=2)&(df.vr>=5)&~df.id.isin(stable)].copy()
-    zen=df[df.id==ZEN_ID]
-    if not zen.empty:c=pd.concat([c,zen]).drop_duplicates("id")
     c["btc_rel_7d"]=c.price_change_percentage_7d_in_currency-btc7
     c["pre"]=np.clip(c.vr/25*20,0,20)+np.clip((c.price_change_percentage_24h+10)*.8,0,20)+np.clip((c.btc_rel_7d+10)*.4,0,20)+np.clip(c.vr/10,0,20)
     pre=c.sort_values("pre",ascending=False).head(60).copy()
-    if not zen.empty:pre=pd.concat([pre,zen]).drop_duplicates("id")
 
     ex=None; primary_exchange="N/A"
     for name in ("okx","kraken","bybit"):
@@ -424,7 +418,7 @@ def main():
         previous_sig=last_states.get(ticker); previous_rank=state_rank.get(previous_sig,-2); current_rank=state_rank.get(sig,-2)
         key=f"{now[:10]}|{VERSION}|{ticker}|STATE|{sig}"
         state_advanced=current_rank>previous_rank and current_rank>=1
-        if (("BREAKOUT" in sig or "RETEST" in sig) and (score>=70 or ticker=="ZEN") and key not in keys) or state_advanced:
+        if (("BREAKOUT" in sig or "RETEST" in sig) and score>=70 and key not in keys) or state_advanced:
             missing=[tf for tf in WEIGHTS if pd.isna(r.get("rsi_"+tf.lower()))]
             msg=(f"{sig}\n\n{r['coin']} ({ticker})\nTechnical score: {score:.1f}\nBreakout progression: {previous_sig or "No previous signal"} → {sig}\nWeighted RSI: {r['weighted_rsi'] if r['weighted_rsi'] is not None else 'N/A'}\n"
                  f"BTC market direction: {btc_signal}\nBTC 24h/7d: {btc24:.2f}% / {btc7:.2f}%\nBTC dominance: {dom['current']:.2f}% ({dom['trend']})\n"
