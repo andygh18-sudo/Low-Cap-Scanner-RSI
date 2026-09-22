@@ -1247,8 +1247,40 @@ def _background_age_minutes(ts):
         return np.nan
 
 _bg=_load_background_scan()
+
+# Dedicated RSI-14 selector is rendered independently of the background scan
+# so it remains visible even when data/latest_scan.json is temporarily absent.
+# Prefer the latest background tickers, then augment with the CoinGecko Top-500
+# universe, and always retain ZEN.
+_rsi14_bg_tickers=[]
 if _bg:
-    _meta=_bg.get("meta",{}) or {}
+    _rsi14_bg_rows=_bg.get("all") or _bg.get("top10") or []
+    if _rsi14_bg_rows:
+        _rsi14_bg_df=pd.DataFrame(_rsi14_bg_rows)
+        if "ticker" in _rsi14_bg_df:
+            _rsi14_bg_tickers=_rsi14_bg_df["ticker"].dropna().astype(str).str.upper().tolist()
+
+_rsi14_market_tickers=[]
+try:
+    _rsi14_mkt=cg_markets()
+    if _rsi14_mkt is not None and not _rsi14_mkt.empty:
+        for _col in ["symbol"]:
+            if _col in _rsi14_mkt.columns:
+                _rsi14_market_tickers=_rsi14_mkt[_col].dropna().astype(str).str.upper().tolist()
+                break
+except Exception:
+    _rsi14_market_tickers=[]
+
+_rsi14_options=sorted(set(_rsi14_bg_tickers + _rsi14_market_tickers + ["ZEN"]))
+_rsi14_default=_rsi14_options.index("ZEN") if "ZEN" in _rsi14_options else 0
+_rsi14_selected=st.selectbox(
+    "Selected coin RSI-14",
+    _rsi14_options,
+    index=_rsi14_default,
+    key="deep_rsi14_coin_select",
+    help="Select a coin to view its daily RSI-14 from completed exchange candles."
+)
+\nif _bg:\n    _meta=_bg.get("meta",{}) or {}
     _btc=_bg.get("btc_market",{}) or {}
     _age=_background_age_minutes(_meta.get("generated_at"))
     _fresh="🟢 FRESH" if pd.notna(_age) and _age<=90 else ("🟡 AGING" if pd.notna(_age) and _age<=240 else "🔴 STALE")
@@ -1318,19 +1350,6 @@ if _bg:
         st.subheader("🎯 Coin Deep Dive — Background")
         _tickers=sorted(_bgdf["ticker"].dropna().astype(str).str.upper().unique()) if "ticker" in _bgdf else []
 
-        # Dedicated RSI-14 selector inside Coin Deep Dive.
-        _rsi14_options=sorted(set(_tickers + ["ZEN"]))
-        _rsi14_selected=None
-        if _rsi14_options:
-            _rsi14_default=_rsi14_options.index("ZEN") if "ZEN" in _rsi14_options else 0
-            _rsi14_selected=st.selectbox(
-                "Select a coin RSI-14",
-                _rsi14_options,
-                index=_rsi14_default,
-                key="deep_rsi14_coin_select",
-                help="Select a coin to view its daily RSI-14 from completed exchange candles."
-            )
-
         if _tickers:
             _default=_tickers.index("ZEN") if "ZEN" in _tickers else 0
             _selected=st.selectbox("Select background coin",_tickers,index=_default,key="bg_coin_select")
@@ -1354,26 +1373,26 @@ if _bg:
                     _q=[c for c in ["downside_beta","btc_down_day_rel_pct","btc_down_day_outperform_pct","oi_1d_pct","oi_3d_pct","oi_7d_pct","funding","derivatives_state","supply_score","circ_pct_max","fdv_mcap","unlock_risk"] if c in _z.index]
                     st.dataframe(pd.DataFrame({"Metric":_q,"Value":[_z[c] for c in _q]}),hide_index=True,use_container_width=True)
 
-        if _rsi14_selected:
-            # The Coin Deep Dive block is rendered before the sidebar exchange
-            # selector. Read its current widget value from Session State when
-            # available, with OKX as the same default used by the dashboard.
-            _rsi14_exchange=st.session_state.get("v8_exchange","okx")
-            _rsi14_cand,_rsi14_symbol=chart_ohlcv(_rsi14_exchange,_rsi14_selected,"1d",220)
-            if not _rsi14_cand.empty:
-                _rsi14_feat=chart_features(_rsi14_cand)
-                _rsi14_series=_rsi14_feat[["RSI14"]].dropna()
-                if not _rsi14_series.empty:
-                    st.markdown(f"**{_rsi14_selected} — Daily RSI-14**")
-                    st.line_chart(_rsi14_series,height=260)
-                    _rsi14_last=float(_rsi14_series["RSI14"].iloc[-1])
-                    st.caption(f"{_rsi14_selected} RSI-14: {_fmt(_rsi14_last)} | Source: {_rsi14_exchange.upper()} {_rsi14_symbol or 'N/A'} | RSI reference: <30 oversold, 40–60 neutral, >70 overbought.")
-                else:
-                    st.info(f"Not enough completed candles to calculate RSI-14 for {_rsi14_selected}.")
-            else:
-                st.info(f"No {_rsi14_exchange.upper()} spot candles available for {_rsi14_selected}.")
+# Render the RSI-14 chart outside the background-scan conditional.
+# This keeps the selector/chart available even if the background scan is stale
+# or temporarily unavailable.
+if _rsi14_selected:
+    _rsi14_exchange=st.session_state.get("v8_exchange","okx")
+    _rsi14_cand,_rsi14_symbol=chart_ohlcv(_rsi14_exchange,_rsi14_selected,"1d",220)
+    if not _rsi14_cand.empty:
+        _rsi14_feat=chart_features(_rsi14_cand)
+        _rsi14_series=_rsi14_feat[["RSI14"]].dropna()
+        if not _rsi14_series.empty:
+            st.markdown(f"**{_rsi14_selected} — Daily RSI-14**")
+            st.line_chart(_rsi14_series,height=260)
+            _rsi14_last=float(_rsi14_series["RSI14"].iloc[-1])
+            st.caption(f"{_rsi14_selected} RSI-14: {_fmt(_rsi14_last)} | Source: {_rsi14_exchange.upper()} {_rsi14_symbol or 'N/A'} | RSI reference: <30 oversold, 40–60 neutral, >70 overbought.")
+        else:
+            st.info(f"Not enough completed candles to calculate RSI-14 for {_rsi14_selected}.")
+    else:
+        st.info(f"No {_rsi14_exchange.upper()} spot candles available for {_rsi14_selected}.")
 
-    _qc=_meta.get("quality_counts",{}) or {}
+\n    _qc=_meta.get("quality_counts",{}) or {}
     st.caption(f"Scan quality: candidates={_meta.get('candidate_count','N/A')} | pre-screen={_meta.get('pre_screen_count','N/A')} | ranked={_meta.get('ranked_count','N/A')} | RSI 6/6={_qc.get('rsi_full','N/A')} | RSI 0/6={_qc.get('rsi_zero','N/A')}")
 
 
