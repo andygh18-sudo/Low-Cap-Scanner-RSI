@@ -1271,11 +1271,11 @@ except Exception:
     _rsi14_market_tickers=[]
 
 _rsi14_options=sorted(set(_rsi14_bg_tickers + _rsi14_market_tickers))
-_rsi14_default=0
 _rsi14_selected=st.selectbox(
     "Selected coin RSI-14",
     _rsi14_options,
-    index=_rsi14_default,
+    index=None,
+    placeholder="Select a coin…",
     key="deep_rsi14_coin_select",
     help="Select a coin to view its daily RSI-14 from completed exchange candles."
 )
@@ -1352,8 +1352,7 @@ if _bg:
         _tickers=sorted(_bgdf["ticker"].dropna().astype(str).str.upper().unique()) if "ticker" in _bgdf else []
 
         if _tickers:
-            _default=0
-            _selected=st.selectbox("Select background coin",_tickers,index=_default,key="bg_coin_select")
+            _selected=st.selectbox("Select background coin",_tickers,index=None,placeholder="Select a coin…",key="bg_coin_select")
             _coin=_bgdf[_bgdf["ticker"].astype(str).str.upper().eq(_selected)].head(1)
             if not _coin.empty:
                 _z=_coin.iloc[0]
@@ -1442,7 +1441,7 @@ if _rsi14_selected:
         else:
             st.info(f"Not enough completed candles to calculate RSI-14 for {_rsi14_selected}.")
     else:
-        st.info(f"No {_rsi14_exchange.upper()} spot candles available for {_rsi14_selected}.")
+        st.warning(f"No {_rsi14_exchange.upper()} spot candles available for the selected coin {_rsi14_selected}.")
 
 
     _qc=_meta.get("quality_counts",{}) or {}
@@ -1496,16 +1495,15 @@ with _chart_cols[1]:
         _chart_options=[]
 
     if _chart_options:
-        _default_idx=0
         _chart_ticker=st.selectbox(
             "Select coin for historical chart",
             _chart_options,
-            index=_default_idx,
+            index=None,
+            placeholder="Select a coin…",
             key="chart_coin_select",
             help="Select a coin from the latest background scan. Historical candles use the selected exchange."
         )
-    elif '_selected' in globals() and _selected:
-        _chart_ticker=_selected
+    # The historical chart is independently controlled by its own selector.
 
     if _chart_ticker:
         _coin_chart,_coin_symbol=chart_ohlcv(exchange,_chart_ticker,"1d",220)
@@ -1516,7 +1514,7 @@ with _chart_cols[1]:
                 st.line_chart(_ccf[_cs].dropna(how="all"),height=360)
             st.caption(f"Source: {exchange.upper()} {_coin_symbol or 'N/A'} | {_chart_ticker} | completed daily candles")
         else:
-            st.info(f"No {exchange.upper()} spot market data available for {_chart_ticker}.")
+            st.warning(f"No {exchange.upper()} spot market data available for the selected coin {_chart_ticker}.")
 st.markdown("**Selected coin RSI-14**")
 if _chart_ticker and not _coin_chart.empty:
     _rsi_chart=_ccf[["RSI14"]].dropna()
@@ -1525,7 +1523,7 @@ if _chart_ticker and not _coin_chart.empty:
     _last_rvol=float(_ccf["RVOL"].iloc[-1]) if pd.notna(_ccf["RVOL"].iloc[-1]) else np.nan
     st.caption(f"{_chart_ticker} daily RSI-14: {_fmt(_last_rsi)} | RVOL(20): {_fmt(_last_rvol,'x',2)} | RSI reference: <30 oversold, 40–60 neutral, >70 overbought.")
 else:
-    st.info("Select a coin in Coin Deep Dive above to populate its chart.")
+    st.info("Select a coin above to populate its RSI-14 chart.")
 
 
 
