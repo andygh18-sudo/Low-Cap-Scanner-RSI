@@ -172,7 +172,7 @@ def main():
         elif mm.get("daily_breakout"):sig="🟡 BREAKOUT ATTEMPT"
         elif tech>=70:sig="🟢 STRONG SETUP"
         else:sig="⚪ BASE / PRE-BREAKOUT"
-        rows.append({"coin":x["name"],"ticker":t,"id":x["id"],"market_cap_m":float(x.mcap_m),"volume_m":float(x.vol_m),"vol_mcap_pct":float(x.vr),"change_24h_pct":float(x.price_change_percentage_24h),"change_7d_pct":float(x.price_change_percentage_7d),"btc_rel_7d_pct":float(x.btc_rel_7d),
+        rows.append({"coin":x["name"],"ticker":t,"id":x["id"],"market_cap_m":float(x.mcap_m),"volume_m":float(x.vol_m),"vol_mcap_pct":float(x.vr),"change_24h_pct":float(x.price_change_percentage_24h),"change_7d_pct":float(x.price_change_percentage_7d_in_currency),"btc_rel_7d_pct":float(x.btc_rel_7d),
                      "rsi_1h":vals["1H"],"rsi_4h":vals["4H"],"rsi_1d":vals["1D"],"rsi_1w":vals["1W"],"rsi_1m":vals["1M"],"rsi_3m":vals["3M"],"weighted_rsi":wr,"downside_beta":beta,"btc_down_day_rel_pct":downrel,"btc_down_day_outperform_pct":downhit,"technical_score":tech,"true_breakout":tb,"breakout_state":sig,"breakout_exchange":source,"breakout_pct":mm.get("breakout_distance_pct"),"breakout_volume_ratio":mm.get("volume_ratio"),"adx":mm.get("adx"),"plus_di":mm.get("pdi"),"minus_di":mm.get("mdi"),"stoch_k":mm.get("stoch_k"),"stoch_d":mm.get("stoch_d")})
     out=pd.DataFrame(rows).sort_values(["true_breakout","technical_score"],ascending=[False,False])
     breadth=float((c.price_change_percentage_24h>0).mean()*100); regime="RISK-ON" if btc24>2 and btc7>3 and breadth>=55 else ("RISK-OFF" if btc24<-3 and btc7<-5 and breadth<35 else "MIXED / TRANSITION")
