@@ -1336,6 +1336,21 @@ if _bg:
 
 
 
+# ------------------------------ V8 DASHBOARD ------------------------------
+with st.sidebar:
+    st.header("Filters")
+    mincap=st.number_input("Min market cap ($M)", min_value=20.0, max_value=1000.0, value=20.0, step=10.0, format="%.1f", key="v8_mincap")
+    maxcap=st.number_input("Max market cap ($M)", min_value=50.0, max_value=2000.0, value=500.0, step=25.0, format="%.1f", key="v8_maxcap")
+    minvol=st.number_input("Min 24h volume ($M)", min_value=0.5, max_value=500.0, value=2.0, step=0.5, format="%.1f", key="v8_minvol")
+    minvr=st.number_input("Min volume / market cap (%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0, format="%.1f", key="v8_minvr")
+    preselect=st.slider("Fast pre-screen size", min_value=50, max_value=100, value=60, step=10, key="v8_preselect")
+    deep_count=st.slider("Deep technical analysis", min_value=10, max_value=25, value=15, step=5, key="v8_deep_count")
+    exchange=st.selectbox("Exchange candles",["okx","kraken","bybit"],index=0, key="v8_exchange")
+    run=st.button("🚀 Run full scanner",type="primary", key="v8_run")
+    live_telegram=st.checkbox("Send Telegram from dashboard",value=False,help="Keep disabled when GitHub Actions is already sending scanner alerts, to prevent duplicates.")
+    st.caption("The dashboard loads the latest GitHub Actions scan by default. Run the live technical engine only when you need fresh exchange candles.")
+    st.caption("v8 analyses a broad pre-screen before applying the expensive structural breakout engine. ZEN is always retained.")
+
 # ------------------------------ V8.4.1 CHARTS ------------------------------
 st.subheader("📈 Market & Coin Charts")
 _chart_cols=st.columns(2)
@@ -1377,20 +1392,7 @@ if _chart_ticker and not _coin_chart.empty:
 else:
     st.info("Select a coin in Coin Deep Dive above to populate its chart.")
 
-# ------------------------------ V8 DASHBOARD ------------------------------
-with st.sidebar:
-    st.header("Filters")
-    mincap=st.number_input("Min market cap ($M)", min_value=20.0, max_value=1000.0, value=20.0, step=10.0, format="%.1f", key="v8_mincap")
-    maxcap=st.number_input("Max market cap ($M)", min_value=50.0, max_value=2000.0, value=500.0, step=25.0, format="%.1f", key="v8_maxcap")
-    minvol=st.number_input("Min 24h volume ($M)", min_value=0.5, max_value=500.0, value=2.0, step=0.5, format="%.1f", key="v8_minvol")
-    minvr=st.number_input("Min volume / market cap (%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0, format="%.1f", key="v8_minvr")
-    preselect=st.slider("Fast pre-screen size", min_value=50, max_value=100, value=60, step=10, key="v8_preselect")
-    deep_count=st.slider("Deep technical analysis", min_value=10, max_value=25, value=15, step=5, key="v8_deep_count")
-    exchange=st.selectbox("Exchange candles",["okx","kraken","bybit"],index=0, key="v8_exchange")
-    run=st.button("🚀 Run full scanner",type="primary", key="v8_run")
-    live_telegram=st.checkbox("Send Telegram from dashboard",value=False,help="Keep disabled when GitHub Actions is already sending scanner alerts, to prevent duplicates.")
-    st.caption("The dashboard loads the latest GitHub Actions scan by default. Run the live technical engine only when you need fresh exchange candles.")
-    st.caption("v8 analyses a broad pre-screen before applying the expensive structural breakout engine. ZEN is always retained.")
+
 
 st.title("🔬 Live Deep Technical Analysis")
 st.caption("v8.3 two-stage engine: 50–100 fast candidates → 10–25 deep technical candidates")
