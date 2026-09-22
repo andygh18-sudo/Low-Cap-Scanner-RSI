@@ -1194,6 +1194,7 @@ st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8")
 st.caption("v8.3 two-stage engine: 50–100 fast candidates → 10–25 deep technical candidates")
 
 if "run" not in st.session_state: st.session_state.run=False
+if run: st.session_state.run=True
 if run or st.session_state.run:
     try:
         with st.spinner("Loading market universe with CoinGecko 429 protection…"):
