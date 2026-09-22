@@ -1376,11 +1376,32 @@ with _chart_cols[0]:
         st.info("BTC chart data unavailable from the selected exchange.")
 with _chart_cols[1]:
     st.markdown("**Selected coin price / RSI / breakout structure**")
+    # Independent selector: the chart must remain usable even if the
+    # optional Coin Deep Dive section above is not rendered.
     _chart_ticker=None
-    if '_selected' in globals() and _selected:
+    _chart_options=[]
+    try:
+        _chart_bg=_load_background_scan() or {}
+        _chart_rows=_chart_bg.get("all") or _chart_bg.get("top10") or []
+        _chart_df=pd.DataFrame(_chart_rows)
+        if not _chart_df.empty and "ticker" in _chart_df.columns:
+            _chart_df["_ticker"]=_chart_df["ticker"].astype(str).str.upper()
+            _chart_options=sorted(_chart_df["_ticker"].dropna().unique().tolist())
+    except Exception:
+        _chart_options=[]
+
+    if _chart_options:
+        _default_idx=_chart_options.index("ZEN") if "ZEN" in _chart_options else 0
+        _chart_ticker=st.selectbox(
+            "Select coin for historical chart",
+            _chart_options,
+            index=_default_idx,
+            key="chart_coin_select",
+            help="Select a coin from the latest background scan. Historical candles use the selected exchange."
+        )
+    elif '_selected' in globals() and _selected:
         _chart_ticker=_selected
-    elif '_tickers' in globals() and _tickers:
-        _chart_ticker=_tickers[0]
+
     if _chart_ticker:
         _coin_chart,_coin_symbol=chart_ohlcv(exchange,_chart_ticker,"1d",220)
         if not _coin_chart.empty:
