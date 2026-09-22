@@ -1355,7 +1355,11 @@ if _bg:
                     st.dataframe(pd.DataFrame({"Metric":_q,"Value":[_z[c] for c in _q]}),hide_index=True,use_container_width=True)
 
         if _rsi14_selected:
-            _rsi14_cand,_rsi14_symbol=chart_ohlcv(exchange,_rsi14_selected,"1d",220)
+            # The Coin Deep Dive block is rendered before the sidebar exchange
+            # selector. Read its current widget value from Session State when
+            # available, with OKX as the same default used by the dashboard.
+            _rsi14_exchange=st.session_state.get("v8_exchange","okx")
+            _rsi14_cand,_rsi14_symbol=chart_ohlcv(_rsi14_exchange,_rsi14_selected,"1d",220)
             if not _rsi14_cand.empty:
                 _rsi14_feat=chart_features(_rsi14_cand)
                 _rsi14_series=_rsi14_feat[["RSI14"]].dropna()
@@ -1363,7 +1367,7 @@ if _bg:
                     st.markdown(f"**{_rsi14_selected} — Daily RSI-14**")
                     st.line_chart(_rsi14_series,height=260)
                     _rsi14_last=float(_rsi14_series["RSI14"].iloc[-1])
-                    st.caption(f"{_rsi14_selected} RSI-14: {_fmt(_rsi14_last)} | Source: {exchange.upper()} {_rsi14_symbol or 'N/A'} | RSI reference: <30 oversold, 40–60 neutral, >70 overbought.")
+                    st.caption(f"{_rsi14_selected} RSI-14: {_fmt(_rsi14_last)} | Source: {_rsi14_exchange.upper()} {_rsi14_symbol or 'N/A'} | RSI reference: <30 oversold, 40–60 neutral, >70 overbought.")
                 else:
                     st.info(f"Not enough completed candles to calculate RSI-14 for {_rsi14_selected}.")
             else:
