@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import ccxt
 
-VERSION = "v8.1"
+VERSION = "v8.2"
 CG = "https://api.coingecko.com/api/v3"
 ZEN_ID = "horizen"
 WEIGHTS = {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}
@@ -74,19 +74,49 @@ def rsi(s,n=14):
     out=out.where(~((al==0)&(ag>0)),100).where(~((al==0)&(ag==0)),50)
     return float(out.iloc[-1]) if len(out) and pd.notna(out.iloc[-1]) else np.nan
 
-def mtf_rsi(ex,ticker):
-    vals={k:np.nan for k in WEIGHTS}; sym=symbol(ex,ticker)
-    if not sym:return vals
-    for tf in ("1h","4h"):
-        try: vals[tf.upper()]=rsi(ohlcv(ex,sym,tf,300).close)
-        except Exception: pass
-    try:
-        d=ohlcv(ex,sym,"1d",1000); s=d.set_index("ts").close.astype(float).dropna().sort_index()
-        vals["1D"]=rsi(s)
-        for key,rule in (("1W","W-SUN"),("1M","ME"),("3M","QE")):
-            q=s.resample(rule).last().dropna(); vals[key]=rsi(q) if len(q)>=15 else np.nan
-    except Exception: pass
-    return vals
+def mtf_rsi(exchanges,ticker):
+    vals={k:np.nan for k in WEIGHTS}; sources={k:"N/A" for k in WEIGHTS}
+    if not isinstance(exchanges,(list,tuple)): exchanges=[exchanges]
+    exchanges=[e for e in exchanges if e is not None]
+
+    def use(tf_key, tf_candidates, min_len=15):
+        for ex in exchanges:
+            sym=symbol(ex,ticker)
+            if not sym: continue
+            for tf in tf_candidates:
+                try:
+                    d=ohlcv(ex,sym,tf,300 if tf in ("1h","4h") else 1000)
+                    if len(d)>=min_len:
+                        v=rsi(d.close)
+                        if pd.notna(v):
+                            vals[tf_key]=v; sources[tf_key]=ex.id.upper(); return True
+                except Exception:
+                    continue
+        return False
+
+    use("1H",("1h",),15)
+    use("4H",("4h",),15)
+    if not use("1D",("1d",),15):
+        return vals,sources
+
+    for ex in exchanges:
+        sym=symbol(ex,ticker)
+        if not sym: continue
+        try:
+            d=ohlcv(ex,sym,"1d",1000)
+            s=d.set_index("ts").close.astype(float).dropna().sort_index()
+            for key,rule in (("1W","W-SUN"),("1M","ME"),("3M","QE")):
+                if pd.isna(vals[key]):
+                    q=s.resample(rule).last().dropna()
+                    if len(q)>=15:
+                        v=rsi(q)
+                        if pd.notna(v): vals[key]=v; sources[key]=ex.id.upper()
+        except Exception:
+            continue
+
+    use("1M",("1M",),15)
+    use("3M",("3M",),15)
+    return vals,sources
 
 def weighted(vals):
     u=[(v,WEIGHTS[k]) for k,v in vals.items() if pd.notna(v)]
@@ -137,7 +167,7 @@ def downside(ex,ticker):
         return beta,float((z.coin-z.btc).mean()*100),float((z.coin>z.btc).mean()*100)
     except Exception:return np.nan,np.nan,np.nan
 
-def technical_score(m,wrsi,rel,downhit):
+def technical_score(m,wrsi,rel,downhit,rsi_quality=100):
     s=0
     s+=12 if m.get("daily_breakout") else 0; s+=8 if m.get("weekly_breakout") else 0; s+=8 if m.get("volume_confirmed") else 0; s+=5 if m.get("close_near_high") else 0
     s+=8 if m.get("obv_breakout") else 0; s+=5 if m.get("atr_expanding") else 0; s+=6 if m.get("ema_bullish") else 0; s+=3 if m.get("ema200_bullish") else 0
@@ -145,7 +175,9 @@ def technical_score(m,wrsi,rel,downhit):
     s+=5 if pd.notna(m.get("adx")) and m["adx"]>=25 else 0; s+=4 if pd.notna(m.get("pdi")) and pd.notna(m.get("mdi")) and m["pdi"]-m["mdi"]>=5 else 0
     s+=5 if pd.notna(m.get("stoch_k")) and pd.notna(m.get("stoch_d")) and m["stoch_k"]>=50 and m["stoch_k"]>m["stoch_d"] else 0
     s+=5 if pd.notna(wrsi) and wrsi<75 else 0; s+=5 if rel>=5 else 0; s+=4 if pd.notna(downhit) and downhit>=50 else 0
-    return float(np.clip(s/96*100,0,100))
+    raw=float(np.clip(s/96*100,0,100))
+    quality_factor=0.70+0.30*float(np.clip(rsi_quality,0,100))/100.0
+    return float(np.clip(raw*quality_factor,0,100))
 
 def true_breakout(m,vr,wrsi,rel):
     return bool(m.get("daily_breakout") and m.get("weekly_breakout") and m.get("volume_confirmed") and m.get("close_near_high") and pd.notna(m.get("atr_distance")) and m["atr_distance"]>=.25 and m.get("atr_expanding") and m.get("obv_breakout") and rel>=5 and vr>=10 and pd.notna(wrsi) and wrsi<75 and pd.notna(m.get("stoch_k")) and pd.notna(m.get("stoch_d")) and m["stoch_k"]>=50 and m["stoch_k"]>m["stoch_d"] and pd.notna(m.get("adx")) and m["adx"]>=25 and m["adx"]>m.get("adx_prev",-np.inf) and pd.notna(m.get("pdi")) and pd.notna(m.get("mdi")) and m["pdi"]-m["mdi"]>=5 and m.get("ema_bullish"))
@@ -179,15 +211,19 @@ def main():
             primary_exchange=name
             break
     rows=[]
+    exchange_pool=[exchange(name) for name in ("okx","kraken","bybit")]
+    exchange_pool=[e for e in exchange_pool if e is not None]
     for _,x in pre.iterrows():
-        t=str(x.symbol).upper(); vals=mtf_rsi(ex,t) if symbol(ex,t) else {k:np.nan for k in WEIGHTS}; wr=weighted(vals); mm={}; source=primary_exchange.upper() if primary_exchange!="N/A" else "N/A"
+        t=str(x.symbol).upper(); vals,rsi_sources=mtf_rsi(exchange_pool,t); wr=weighted(vals); valid_tfs=[k for k,v in vals.items() if pd.notna(v)]; rsi_quality=len(valid_tfs)/len(WEIGHTS)*100; rsi_source="/".join(dict.fromkeys(rsi_sources[k] for k in WEIGHTS if rsi_sources[k]!="N/A")) or "N/A"; mm={}; source=primary_exchange.upper() if primary_exchange!="N/A" else "N/A"
         for name in ("okx","kraken","bybit"):
             try:
                 e=exchange(name); s=symbol(e,t)
                 if s: mm=metrics(ohlcv(e,s,"1d",100),ohlcv(e,s,"1w",80)); source=name.upper(); break
             except Exception: continue
-        beta,downrel,downhit=downside(ex,t); tech=technical_score(mm,wr,float(x.btc_rel_7d),downhit); tb=true_breakout(mm,float(x.vr),wr,float(x.btc_rel_7d))
-        if mm.get("breakout_failed"):sig="🚨 BREAKOUT FAILED"
+        beta,downrel,downhit=downside(ex,t); tech=technical_score(mm,wr,float(x.btc_rel_7d),downhit,rsi_quality); tb=true_breakout(mm,float(x.vr),wr,float(x.btc_rel_7d))
+        if rsi_quality < 50:
+            sig="⚠️ DATA QUALITY WARNING"
+        elif mm.get("breakout_failed"):sig="🚨 BREAKOUT FAILED"
         elif tb and wr<80:sig="🚀 TRUE BREAKOUT"
         elif mm.get("retest_held"):sig="🚀 RETEST HELD"
         elif mm.get("breakout_accepted"):sig="🟢 BREAKOUT ACCEPTED"
@@ -195,7 +231,7 @@ def main():
         elif tech>=70:sig="🟢 STRONG SETUP"
         else:sig="⚪ BASE / PRE-BREAKOUT"
         rows.append({"coin":x["name"],"ticker":t,"id":x["id"],"market_cap_m":float(x.mcap_m),"volume_m":float(x.vol_m),"vol_mcap_pct":float(x.vr),"change_24h_pct":float(x.price_change_percentage_24h),"change_7d_pct":float(x.price_change_percentage_7d_in_currency),"btc_rel_7d_pct":float(x.btc_rel_7d),
-                     "rsi_1h":vals["1H"],"rsi_4h":vals["4H"],"rsi_1d":vals["1D"],"rsi_1w":vals["1W"],"rsi_1m":vals["1M"],"rsi_3m":vals["3M"],"weighted_rsi":wr,"downside_beta":beta,"btc_down_day_rel_pct":downrel,"btc_down_day_outperform_pct":downhit,"technical_score":tech,"true_breakout":tb,"breakout_state":sig,"breakout_exchange":source,"breakout_pct":mm.get("breakout_distance_pct"),"breakout_volume_ratio":mm.get("volume_ratio"),"adx":mm.get("adx"),"plus_di":mm.get("pdi"),"minus_di":mm.get("mdi"),"stoch_k":mm.get("stoch_k"),"stoch_d":mm.get("stoch_d")})
+                     "rsi_1h":vals["1H"],"rsi_4h":vals["4H"],"rsi_1d":vals["1D"],"rsi_1w":vals["1W"],"rsi_1m":vals["1M"],"rsi_3m":vals["3M"],"weighted_rsi":wr,"rsi_valid_timeframes":len(valid_tfs),"rsi_quality_pct":rsi_quality,"rsi_source":rsi_source,"downside_beta":beta,"btc_down_day_rel_pct":downrel,"btc_down_day_outperform_pct":downhit,"technical_score":tech,"true_breakout":tb,"breakout_state":sig,"breakout_exchange":source,"breakout_pct":mm.get("breakout_distance_pct"),"breakout_volume_ratio":mm.get("volume_ratio"),"adx":mm.get("adx"),"plus_di":mm.get("pdi"),"minus_di":mm.get("mdi"),"stoch_k":mm.get("stoch_k"),"stoch_d":mm.get("stoch_d")})
     out=pd.DataFrame(rows).sort_values(["true_breakout","technical_score"],ascending=[False,False])
     breadth=float((c.price_change_percentage_24h>0).mean()*100); regime="RISK-ON" if btc24>2 and btc7>3 and breadth>=55 else ("RISK-OFF" if btc24<-3 and btc7<-5 and breadth<35 else "MIXED / TRANSITION")
     now=datetime.now(timezone.utc).isoformat(); clean=out.replace({np.nan:None})
