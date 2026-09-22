@@ -28,10 +28,17 @@ def cg_get(path, params=None):
 def markets():
     frames=[]
     for page in (1,2):
-        frames.append(pd.DataFrame(cg_get("coins/markets", {"vs_currency":"usd","order":"market_cap_desc","per_page":250,"page":page,"sparkline":"false","price_change_percentage":"24h,7d"})))
-    try:
-    except Exception as e:
-        print(f"Direct CoinGecko fetch failed: {type(e).__name__}: {e}")
+        frames.append(pd.DataFrame(cg_get(
+            "coins/markets",
+            {
+                "vs_currency":"usd",
+                "order":"market_cap_desc",
+                "per_page":250,
+                "page":page,
+                "sparkline":"false",
+                "price_change_percentage":"24h,7d"
+            }
+        )))
     return pd.concat(frames,ignore_index=True).drop_duplicates("id")
 
 def market_context():
