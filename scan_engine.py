@@ -7,7 +7,6 @@ import ccxt
 from rsi_engine import multi_timeframe_rsi, weighted_rsi
 
 CG='https://api.coingecko.com/api/v3'
-ZEN_ID='horizen'
 STABLES={'tether','usd-coin','dai','usds','true-usd','usdd'}
 
 session=requests.Session()
@@ -123,8 +122,6 @@ def scan():
     btc=df[df.id.eq('bitcoin')].iloc[0]
     btc24=float(btc.price_change_percentage_24h); btc7=float(btc.price_change_percentage_7d_in_currency)
     c=df[df.mcap_m.between(20,500)&(df.vol_m>=2)&(df.vr>=5)&~df.id.isin(STABLES)].copy()
-    zen=df[df.id.eq(ZEN_ID)]
-    if not zen.empty:c=pd.concat([c,zen],ignore_index=True).drop_duplicates('id')
     c['btc_rel_7d']=c.price_change_percentage_7d_in_currency-btc7
     breadth=float((c.price_change_percentage_24h>0).mean()*100) if len(c) else 0
     if btc24>2 and btc7>3 and breadth>=55: regime='RISK-ON'; regime_penalty=0
@@ -134,9 +131,6 @@ def scan():
     # Preselect the most liquid/active names to keep scheduled runs reliable.
     c['pre_score']=np.clip(c.vr/25*30,0,30)+np.clip((c.price_change_percentage_24h+10)*1.0,0,20)+np.clip((c.btc_rel_7d+10)*0.5,0,10)
     c=c.sort_values('pre_score',ascending=False).head(24).copy()
-    if ZEN_ID not in set(c.id):
-        z=df[df.id.eq(ZEN_ID)]
-        if not z.empty:c=pd.concat([c,z],ignore_index=True).drop_duplicates('id')
 
     btc_s=price_series(chart('bitcoin',90)); rows=[]
     for _,x in c.iterrows():
