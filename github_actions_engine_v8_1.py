@@ -362,12 +362,18 @@ def main():
                  f"\n📊 TOTAL3/BTC: {fmt(t3['ratio'])}\n{t3['trend']}\nTOTAL3/BTC 1D: {fmt(t3['change_1d_pct'])}%\nTOTAL3/BTC 7D: {fmt(t3['change_7d_pct'])}%\n"
                  f"\n😨 FEAR & GREED: {fmt(fg['value'])} — {fg['classification']}\nFear & Greed 1D change: {fmt(fg['change_1d'])}\nSource: Alternative.me\n"
                  f"\nALTCOIN BREADTH: {breadth:.1f}%\nOVERALL REGIME: {regime}\nMissing RSI: {', '.join(missing_btc) if missing_btc else 'None'}")
+        lowcaps=out[(out["technical_score"]>=60) & (out["breakout_state"].str.contains("BREAKOUT|RETEST|STRONG SETUP",regex=True,na=False))].sort_values("technical_score",ascending=False).head(5)
+        if not lowcaps.empty:
+            lowcap_lines=["\\n\\n🔎 TOP LOW-CAP SIGNALS"]
+            for rr in lowcaps.to_dict("records"):
+                lowcap_lines.append(f"{rr['ticker']} — {rr['breakout_state']} | Score {float(rr['technical_score']):.1f} | 24h {float(rr['change_24h_pct']):+.1f}% | 7d {float(rr['change_7d_pct']):+.1f}% | RSI {float(rr['weighted_rsi']):.1f}")
+            btc_msg += "".join(lowcap_lines)
         ok,err=telegram(btc_msg)
         if ok: keys.add(btc_key); sent+=1
         else: print("Telegram BTC:",err)
 
     for r in out.to_dict("records"):
-        sig=r["breakout_state"]; score=float(r.get("technical_score") or 0); key=f"{now[:10]}|{VERSION}|{r['ticker']}|{sig}"
+        sig=r["breakout_state"]; score=float(r.get("technical_score") or 0); score_band=int(float(r.get("technical_score") or 0)//5); key=f"{now[:10]}|{VERSION}|{r['ticker']}|{sig}|S{score_band}"
         if ("BREAKOUT" in sig or "RETEST" in sig) and (score>=70 or r["ticker"]=="ZEN") and key not in keys:
             missing=[tf for tf in WEIGHTS if pd.isna(r.get("rsi_"+tf.lower()))]
             msg=(f"{sig}\n\n{r['coin']} ({r['ticker']})\nTechnical score: {score:.1f}\nWeighted RSI: {r['weighted_rsi'] if r['weighted_rsi'] is not None else 'N/A'}\n"
