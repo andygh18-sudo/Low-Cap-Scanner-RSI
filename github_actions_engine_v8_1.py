@@ -41,12 +41,13 @@ def market_context():
     """Return current BTC dominance and TOTAL3/BTC, plus changes from persisted hourly history.
     This avoids relying on a historical global-chart endpoint that may be unavailable on the API plan.
     """
-    btc_dom=np.nan; eth_dom=np.nan; ratio=np.nan
+    btc_dom=np.nan; usdt_dom=np.nan; eth_dom=np.nan; ratio=np.nan
     try:
         g=cg_get("global").get("data",{})
         pct=g.get("market_cap_percentage",{}) or {}
         btc_dom=float(pct.get("btc",pct.get("bitcoin",np.nan)))
         eth_dom=float(pct.get("eth",pct.get("ethereum",np.nan)))
+        usdt_dom=float(pct.get("usdt",np.nan))
         if pd.notna(btc_dom) and btc_dom>0 and pd.notna(eth_dom):
             ratio=(100.0-btc_dom-eth_dom)/btc_dom
     except Exception as e:
@@ -63,8 +64,13 @@ def market_context():
 
     now=datetime.now(timezone.utc)
     history=[x for x in history if isinstance(x,dict) and x.get("ts")]
-    if pd.notna(btc_dom) or pd.notna(ratio):
-        history.append({"ts":now.isoformat(),"btc_dominance_pct":btc_dom,"total3_btc_ratio":ratio})
+    if pd.isna(usdt_dom):
+        try:
+            u=pd.DataFrame(cg_get("coins/markets",{"vs_currency":"usd","ids":"tether"})); total=float(cg_get("global").get("data",{}).get("total_market_cap",{}).get("usd",np.nan))
+            if not u.empty and total>0: usdt_dom=float(u.iloc[0].get("market_cap",np.nan))/total*100
+        except Exception as e: print(f"USDT dominance fallback failed: {type(e).__name__}: {e}")
+    if pd.notna(btc_dom) or pd.notna(usdt_dom) or pd.notna(ratio):
+        history.append({"ts":now.isoformat(),"btc_dominance_pct":btc_dom,"usdt_dominance_pct":usdt_dom,"total3_btc_ratio":ratio})
     # Keep 14 days of hourly context.
     cutoff=now-pd.Timedelta(days=14)
     cleaned=[]
@@ -97,10 +103,14 @@ def market_context():
 
     dom1=prior("btc_dominance_pct",1)
     dom7=prior("btc_dominance_pct",7)
+    usdt1=prior("usdt_dominance_pct",1)
+    usdt7=prior("usdt_dominance_pct",7)
     t31=prior("total3_btc_ratio",1)
     t37=prior("total3_btc_ratio",7)
     dom_d1=btc_dom-dom1 if pd.notna(btc_dom) and pd.notna(dom1) else np.nan
     dom_d7=btc_dom-dom7 if pd.notna(btc_dom) and pd.notna(dom7) else np.nan
+    usdt_d1=usdt_dom-usdt1 if pd.notna(usdt_dom) and pd.notna(usdt1) else np.nan
+    usdt_d7=usdt_dom-usdt7 if pd.notna(usdt_dom) and pd.notna(usdt7) else np.nan
     t3_d1=(ratio/t31-1)*100 if pd.notna(ratio) and pd.notna(t31) and t31 else np.nan
     t3_d7=(ratio/t37-1)*100 if pd.notna(ratio) and pd.notna(t37) and t37 else np.nan
 
@@ -112,7 +122,7 @@ def market_context():
     elif pd.notna(t3_d7) and t3_d7<=-5: t3_trend="📉 TOTAL3/BTC FALLING"
     else: t3_trend="➡️ TOTAL3/BTC FLAT" if pd.notna(t3_d7) else "⏳ TOTAL3/BTC HISTORY BUILDING"
 
-    return {"dominance_pct":btc_dom,"dominance_change_1d":dom_d1,"dominance_change_7d":dom_d7,"dominance_trend":dom_trend,
+    return {"dominance_pct":btc_dom,"dominance_change_1d":dom_d1,"dominance_change_7d":dom_d7,"dominance_trend":dom_trend,"usdt_dominance_pct":usdt_dom,"usdt_dominance_change_1d":usdt_d1,"usdt_dominance_change_7d":usdt_d7,"usdt_dominance_trend":("RISING" if pd.notna(usdt_d7) and usdt_d7>=0.25 else "FALLING" if pd.notna(usdt_d7) and usdt_d7<=-0.25 else "FLAT" if pd.notna(usdt_d7) else "HISTORY BUILDING"),
             "total3_btc_ratio":ratio,"total3_btc_change_1d_pct":t3_d1,"total3_btc_change_7d_pct":t3_d7,"total3_btc_trend":t3_trend}
 
 def fear_greed():
