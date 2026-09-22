@@ -42,7 +42,6 @@ from rsi_engine import multi_timeframe_rsi, weighted_rsi
 
 
 CG = "https://api.coingecko.com/api/v3"
-ZEN_ID = "horizen"
 DEFAULT_EXCHANGE = "bybit"
 COINGECKO_API_KEY = __import__("os").getenv("COINGECKO_API_KEY", "")
 CG_HEADERS = {"accept": "application/json"}
@@ -104,7 +103,7 @@ def send_scanner_telegram_alerts(finaldf, regime, btc24, btc7):
         confidence = float(row.get("Breakout confidence", 0) or 0)
         is_alert = ("TRUE BREAKOUT" in signal or "BREAKOUT CONFIRMATION" in signal
                     or "BREAKOUT FAILED" in signal or "BREAKOUT WATCH" in signal
-                    or (str(row.get("Ticker", "")).upper() == "ZEN" and confidence >= TELEGRAM_MIN_CONFIDENCE))
+                    )
         if not is_alert or confidence < TELEGRAM_MIN_CONFIDENCE and "FAILED" not in signal:
             continue
         key = telegram_alert_key(row)
@@ -731,8 +730,8 @@ def _coingecko_mtf_rsi_fallback(coin_id):
 def _mtf_rsi_cached(ticker, ex=None, symbol=None, coin_id=None):
     """Return normalized MTF RSI with exchange-independent CoinGecko fallback.
 
-    CoinGecko requires the CoinGecko coin ID (e.g. ``horizen``), not the ticker
-    (e.g. ``ZEN``).  The coin ID is therefore carried explicitly so the fallback
+    CoinGecko requires the CoinGecko coin ID, not the ticker. The coin ID is
+    therefore carried explicitly so the fallback
     cannot silently query an invalid endpoint.
     """
     key = str(ticker).upper()
@@ -1251,7 +1250,7 @@ _bg=_load_background_scan()
 # Dedicated RSI-14 selector is rendered independently of the background scan
 # so it remains visible even when data/latest_scan.json is temporarily absent.
 # Prefer the latest background tickers, then augment with the CoinGecko Top-500
-# universe, and always retain ZEN.
+# universe.
 _rsi14_bg_tickers=[]
 if _bg:
     _rsi14_bg_rows=_bg.get("all") or _bg.get("top10") or []
@@ -1271,8 +1270,8 @@ try:
 except Exception:
     _rsi14_market_tickers=[]
 
-_rsi14_options=sorted(set(_rsi14_bg_tickers + _rsi14_market_tickers + ["ZEN"]))
-_rsi14_default=_rsi14_options.index("ZEN") if "ZEN" in _rsi14_options else 0
+_rsi14_options=sorted(set(_rsi14_bg_tickers + _rsi14_market_tickers))
+_rsi14_default=0
 _rsi14_selected=st.selectbox(
     "Selected coin RSI-14",
     _rsi14_options,
@@ -1353,7 +1352,7 @@ if _bg:
         _tickers=sorted(_bgdf["ticker"].dropna().astype(str).str.upper().unique()) if "ticker" in _bgdf else []
 
         if _tickers:
-            _default=_tickers.index("ZEN") if "ZEN" in _tickers else 0
+            _default=0
             _selected=st.selectbox("Select background coin",_tickers,index=_default,key="bg_coin_select")
             _coin=_bgdf[_bgdf["ticker"].astype(str).str.upper().eq(_selected)].head(1)
             if not _coin.empty:
@@ -1464,7 +1463,7 @@ with st.sidebar:
     run=st.button("🚀 Run full scanner",type="primary", key="v8_run")
     live_telegram=st.checkbox("Send Telegram from dashboard",value=False,help="Keep disabled when GitHub Actions is already sending scanner alerts, to prevent duplicates.")
     st.caption("The dashboard loads the latest GitHub Actions scan by default. Run the live technical engine only when you need fresh exchange candles.")
-    st.caption("v8 analyses a broad pre-screen before applying the expensive structural breakout engine. ZEN is always retained.")
+    st.caption("v8 analyses a broad pre-screen before applying the expensive structural breakout engine.")
 
 # ------------------------------ V8.4.1 CHARTS ------------------------------
 st.subheader("📈 Market & Coin Charts")
@@ -1497,7 +1496,7 @@ with _chart_cols[1]:
         _chart_options=[]
 
     if _chart_options:
-        _default_idx=_chart_options.index("ZEN") if "ZEN" in _chart_options else 0
+        _default_idx=0
         _chart_ticker=st.selectbox(
             "Select coin for historical chart",
             _chart_options,
@@ -1570,18 +1569,14 @@ else:
         btc7=float(btc["price_change_percentage_7d_in_currency"].iloc[0]) if not btc.empty and pd.notna(btc["price_change_percentage_7d_in_currency"].iloc[0]) else 0.0
         btc24=float(btc["price_change_percentage_24h"].iloc[0]) if not btc.empty and pd.notna(btc["price_change_percentage_24h"].iloc[0]) else 0.0
         candidates=df[df.mcap_m.between(mincap,maxcap)&(df.vol_m>=minvol)&(df.vr>=minvr)&~df.id.isin(stable)].copy()
-        zen=df[df.id.eq(ZEN_ID)]
-        if not zen.empty: candidates=pd.concat([candidates,zen],ignore_index=True).drop_duplicates("id")
         candidates["btc_rel_7d"]=pd.to_numeric(candidates["price_change_percentage_7d_in_currency"],errors="coerce")-btc7
         candidates["vol_score"]=np.clip(candidates.vr/25*20,0,20)
         candidates["mom_score"]=np.clip((candidates["price_change_percentage_24h"]+10)*0.8,0,20)
         candidates["rel_score"]=np.clip((candidates.btc_rel_7d+10)*0.4,0,20)
         candidates["liq_score"]=np.clip(candidates.vr/10,0,20)
         candidates["base_score"]=candidates.vol_score+candidates.mom_score+candidates.rel_score+candidates.liq_score
-        # Broad pre-screen: 50–100 candidates, not 15. ZEN is always retained.
+        # Broad pre-screen: 50–100 candidates, not 15.
         presel=candidates.sort_values("base_score",ascending=False).head(int(preselect)).copy()
-        if not zen.empty:
-            presel=pd.concat([presel,zen],ignore_index=True).drop_duplicates("id")
         # Limit the expensive derivatives history to the pre-screen itself; all other metrics are cached.
         st.subheader("Market universe")
         c1,c2,c3,c4,c5=st.columns(5)
@@ -1600,8 +1595,6 @@ else:
             + np.clip((presel["btc_rel_7d"] + 5) * 0.2, 0, 5)
         )
         deep=presel.sort_values("fast_score", ascending=False).head(int(deep_count)).copy()
-        if not zen.empty and str(zen.iloc[0]["id"]) not in set(deep["id"]):
-            deep=pd.concat([deep,zen],ignore_index=True).drop_duplicates("id")
         st.subheader("⚡ Stage 1 — Fast pre-screen")
         fast_view=presel[["name","symbol","mcap_m","vol_m","vr","price_change_percentage_24h",
                           "price_change_percentage_7d_in_currency","btc_rel_7d","fast_score"]].copy()
@@ -1697,7 +1690,7 @@ else:
         st.dataframe(finaldf.round(2),use_container_width=True,hide_index=True)
 
         # Focus table: strongest structural candidates only.
-        focus=finaldf[(finaldf["Signal"].str.contains("BREAKOUT|SETUP",regex=True)) | finaldf["Ticker"].eq("ZEN")].head(15)
+        focus=finaldf[finaldf["Signal"].str.contains("BREAKOUT|SETUP",regex=True)].head(15)
         st.subheader("⭐ Breakout focus")
         st.dataframe(focus.round(2),use_container_width=True,hide_index=True)
 
@@ -1705,7 +1698,7 @@ else:
         st.markdown("""
 **1. Two-stage engine:** Stage 1 ranks 50–100 candidates using market-data momentum/liquidity; Stage 2 deeply analyses only the top 10–25.
 
-**2. Broad pre-screen:** 50–100 candidates enter Stage 1; ZEN is always retained. Only the deep subset reaches the expensive structural engine.
+**2. Broad pre-screen:** 50–100 candidates enter Stage 1. Only the deep subset reaches the expensive structural engine.
 
 **3. Clean scoring:** Technical Quality is 0–100; Regime Score and Risk-Adjusted Score are separate.
 
