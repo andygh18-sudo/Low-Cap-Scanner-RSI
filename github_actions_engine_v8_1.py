@@ -358,7 +358,7 @@ def main():
     payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_price_usd":btc_price,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"btc_dominance_pct":dom["current"],"btc_dominance_change_1d":dom["change_1d"],"btc_dominance_change_7d":dom["change_7d"],"btc_dominance_trend":dom["trend"],"usdt_dominance_pct":ctx["usdt_dominance_pct"],"usdt_dominance_change_1d":ctx["usdt_dominance_change_1d"],"usdt_dominance_change_7d":ctx["usdt_dominance_change_7d"],"usdt_dominance_trend":ctx["usdt_dominance_trend"],"total3_btc_ratio":t3["ratio"],"total3_btc_change_1d_pct":t3["change_1d_pct"],"total3_btc_change_7d_pct":t3["change_7d_pct"],"total3_btc_trend":t3["trend"],"fear_greed_value":fg["value"],"fear_greed_classification":fg["classification"],"fear_greed_change_1d":fg["change_1d"],"candidate_count":len(c),"pre_screen_count":len(pre),"ranked_count":len(out),"exchange":primary_exchange,"data_quality":quality_counts},"btc_market":btc_payload,"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
     os.makedirs("data",exist_ok=True); open("data/latest_scan.json","w",encoding="utf-8").write(json.dumps(payload,indent=2,default=str))
 
-    statefile="data/telegram_alert_state.json"; state=json.load(open(statefile,encoding="utf-8")) if os.path.exists(statefile) else {"keys":[]}; keys=set(state.get("keys",[])); sent=0
+    statefile="data/telegram_alert_state.json"; state=json.load(open(statefile,encoding="utf-8")) if os.path.exists(statefile) else {"keys":[],"last_states":{}}; keys=set(state.get("keys",[])); last_states=state.get("last_states",{}) or {}; sent=0
     btc_key=f"{now[:13]}|{VERSION}|BTC|{btc_signal}|{dom['trend']}|{ctx['usdt_dominance_trend']}|{t3['trend']}|{fg['classification']}"
     if btc_key not in keys:
         missing_btc=[tf for tf in WEIGHTS if pd.isna(btc_vals.get(tf))]
@@ -384,17 +384,24 @@ def main():
         else: print("Telegram BTC:",err)
 
     for r in out.to_dict("records"):
-        sig=r["breakout_state"]; score=float(r.get("technical_score") or 0); score_band=int(float(r.get("technical_score") or 0)//5); key=f"{now[:10]}|{VERSION}|{r['ticker']}|{sig}|S{score_band}"
-        if ("BREAKOUT" in sig or "RETEST" in sig) and (score>=70 or r["ticker"]=="ZEN") and key not in keys:
+        sig=r["breakout_state"]; score=float(r.get("technical_score") or 0); ticker=r["ticker"]
+        state_rank={"⚪ BASE / PRE-BREAKOUT":0,"🟡 BREAKOUT ATTEMPT":1,"🟢 BREAKOUT ACCEPTED":2,"🚀 RETEST HELD":3,"🚀 TRUE BREAKOUT":4,"🚨 BREAKOUT FAILED":-1}
+        previous_sig=last_states.get(ticker); previous_rank=state_rank.get(previous_sig,-2); current_rank=state_rank.get(sig,-2)
+        key=f"{now[:10]}|{VERSION}|{ticker}|STATE|{sig}"
+        state_advanced=current_rank>previous_rank and current_rank>=1
+        if (("BREAKOUT" in sig or "RETEST" in sig) and (score>=70 or ticker=="ZEN") and key not in keys) or state_advanced:
             missing=[tf for tf in WEIGHTS if pd.isna(r.get("rsi_"+tf.lower()))]
-            msg=(f"{sig}\n\n{r['coin']} ({r['ticker']})\nTechnical score: {score:.1f}\nWeighted RSI: {r['weighted_rsi'] if r['weighted_rsi'] is not None else 'N/A'}\n"
+            msg=(f"{sig}\n\n{r['coin']} ({ticker})\nTechnical score: {score:.1f}\nBreakout progression: {previous_sig or "No previous signal"} → {sig}\nWeighted RSI: {r['weighted_rsi'] if r['weighted_rsi'] is not None else 'N/A'}\n"
                  f"BTC market direction: {btc_signal}\nBTC 24h/7d: {btc24:.2f}% / {btc7:.2f}%\nBTC dominance: {dom['current']:.2f}% ({dom['trend']})\n"
                  f"BTC dominance 1D/7D: {dom['change_1d']:.2f}pp / {dom['change_7d']:.2f}pp\nTOTAL3/BTC: {t3['ratio']:.6f} ({t3['trend']})\nTOTAL3/BTC 1D/7D: {t3['change_1d_pct']:.2f}% / {t3['change_7d_pct']:.2f}%\nBTC-relative 7D: {r['btc_rel_7d_pct']:.2f}%\nVol/MCap: {r['vol_mcap_pct']:.2f}%\nADX: {r['adx'] if r['adx'] is not None else 'N/A'}\n"
                  f"\nDATA_QUALITY\nRSI coverage: {r['rsi_valid_timeframes']}/6 ({r['rsi_quality_pct']:.0f}%)\nRSI source: {r['rsi_source']}\nMissing RSI: {', '.join(missing) if missing else 'None'}\n\nRegime: {regime}")
             ok,err=telegram(msg)
-            if ok:keys.add(key); sent+=1
+            if ok:
+                keys.add(key); last_states[ticker]=sig; sent+=1
             else: print("Telegram:",err)
-    state["keys"]=list(keys)[-1000:]; open(statefile,"w",encoding="utf-8").write(json.dumps(state,indent=2))
+        else:
+            last_states[ticker]=sig
+    state["keys"]=list(keys)[-1000:]; state["last_states"]=last_states; open(statefile,"w",encoding="utf-8").write(json.dumps(state,indent=2))
     print(f"{VERSION} scan complete | BTC=${btc_price:,.2f} | candidates={len(c)} pre_screen={len(pre)} primary_exchange={primary_exchange} regime={regime} btc={btc_signal} btc_dom={dom['current']}% {dom['trend']} total3btc={t3['ratio']} {t3['trend']} fng={fg['value']} {fg['classification']} telegram_sent={sent}")
 
 if __name__=="__main__": main()
