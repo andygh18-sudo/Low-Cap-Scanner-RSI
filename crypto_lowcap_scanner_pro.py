@@ -1358,13 +1358,64 @@ if _bg:
             _coin=_bgdf[_bgdf["ticker"].astype(str).str.upper().eq(_selected)].head(1)
             if not _coin.empty:
                 _z=_coin.iloc[0]
+                # Fill missing deep-dive values from the live analysis engine.
+                # Background scans can contain older rows with fields that were
+                # introduced later in v8.x. Do not replace valid background values.
+                _deep_live={}
+                try:
+                    _sym=str(_selected).upper()
+                    _mkt=cg_markets()
+                    if _mkt is not None and not _mkt.empty and "symbol" in _mkt.columns:
+                        _match=_mkt[_mkt["symbol"].astype(str).str.upper().eq(_sym)].head(1)
+                        if not _match.empty:
+                            _deep_live=analysis_bundle(
+                                st.session_state.get("v8_exchange","okx"),
+                                _match.iloc[0].to_dict()
+                            ) or {}
+                except Exception:
+                    _deep_live={}
+
+                _deep_metrics=_deep_live.get("metrics",{}) or {}
+                _deep_rsi=_deep_live.get("weighted_rsi",np.nan)
+                _deep_tech=_safe_num(_z.get("technical_score"))
+                if pd.isna(_deep_tech) and _deep_metrics:
+                    _deep_btc_rel=_safe_num(_z.get("btc_rel_7d_pct"))
+                    _deep_down_rel=_safe_num(_z.get("btc_down_day_rel_pct"))
+                    _deep_down_hit=_safe_num(_z.get("btc_down_day_outperform_pct"))
+                    _deep_tech=technical_score_v8(
+                        _deep_metrics,_deep_rsi,_deep_btc_rel,
+                        _deep_live.get("base",{}) or {},
+                        _deep_live.get("supply",{}) or {},
+                        _deep_down_rel,_deep_down_hit
+                    )
+
+                _deep_risk=_safe_num(_z.get("risk_adjusted_score"))
+                _deep_conf=_safe_num(_z.get("breakout_confidence"))
+                _deep_wrsi=_safe_num(_z.get("weighted_rsi"))
+                if pd.isna(_deep_wrsi):
+                    _deep_wrsi=_safe_num(_deep_rsi)
+
+                _deep_btc_rel=_safe_num(_z.get("btc_rel_7d_pct"))
+                if pd.isna(_deep_btc_rel):
+                    _coin_7d=_safe_num(_z.get("change_7d_pct"))
+                    _btc_7d=_safe_num(_meta.get("btc_7d"))
+                    if pd.notna(_coin_7d) and pd.notna(_btc_7d):
+                        _deep_btc_rel=_coin_7d-_btc_7d
+
+                _deep_volmcap=_safe_num(_z.get("vol_mcap_pct"))
+                if pd.isna(_deep_volmcap):
+                    _vol=_safe_num(_z.get("total_volume"))
+                    _mcap=_safe_num(_z.get("mcap_m"))
+                    if pd.notna(_vol) and pd.notna(_mcap) and _mcap>0:
+                        _deep_volmcap=(_vol/(_mcap*1e6))*100
+
                 _dc=st.columns(6)
-                _dc[0].metric("Technical",_fmt(_z.get("technical_score")))
-                _dc[1].metric("Risk-adjusted",_fmt(_z.get("risk_adjusted_score")))
-                _dc[2].metric("Confidence",_fmt(_z.get("breakout_confidence")))
-                _dc[3].metric("Weighted RSI",_fmt(_z.get("weighted_rsi")))
-                _dc[4].metric("BTC-rel 7d",_fmt(_z.get("btc_rel_7d_pct"),"%"))
-                _dc[5].metric("Vol/MCap",_fmt(_z.get("vol_mcap_pct"),"%"))
+                _dc[0].metric("Technical",_fmt(_deep_tech))
+                _dc[1].metric("Risk-adjusted",_fmt(_deep_risk))
+                _dc[2].metric("Confidence",_fmt(_deep_conf))
+                _dc[3].metric("Weighted RSI",_fmt(_deep_wrsi))
+                _dc[4].metric("BTC-rel 7d",_fmt(_deep_btc_rel,"%"))
+                _dc[5].metric("Vol/MCap",_fmt(_deep_volmcap,"%"))
                 _l,_r=st.columns(2)
                 with _l:
                     st.markdown("**Structure & momentum**")
