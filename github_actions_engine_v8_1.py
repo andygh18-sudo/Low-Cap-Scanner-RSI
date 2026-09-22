@@ -288,7 +288,7 @@ def btc_direction(btc24,btc7,wrsi,m,dom):
 
 def main():
     df=markets(); df["mcap_m"]=df.market_cap/1e6; df["vol_m"]=df.total_volume/1e6; df["vr"]=df.total_volume/df.market_cap*100
-    btc=df[df.id=="bitcoin"].iloc[0]; btc7=float(btc.get("price_change_percentage_7d_in_currency",0) or 0); btc24=float(btc.get("price_change_percentage_24h",0) or 0)
+    btc=df[df.id=="bitcoin"].iloc[0]; btc_price=float(btc.get("current_price",np.nan)); btc7=float(btc.get("price_change_percentage_7d_in_currency",0) or 0); btc24=float(btc.get("price_change_percentage_24h",0) or 0)
     dom=btc_dominance()
     t3=total3_btc()
     fg=fear_greed()
@@ -343,8 +343,8 @@ def main():
     regime="RISK-ON" if btc24>2 and btc7>3 and breadth>=55 else ("RISK-OFF" if btc24<-3 and btc7<-5 and breadth<35 else "MIXED / TRANSITION")
     now=datetime.now(timezone.utc).isoformat(); clean=out.replace({np.nan:None})
     quality_counts={"pre_screen":len(pre),"ranked":len(out),"zero_rsi_rejected":len(rejected_zero_rsi),"rsi_6of6":int((out.rsi_valid_timeframes==6).sum()) if not out.empty else 0,"rsi_5plus":int((out.rsi_valid_timeframes>=5).sum()) if not out.empty else 0,"rsi_3plus":int((out.rsi_valid_timeframes>=3).sum()) if not out.empty else 0,"data_quality_warning":int((out.rsi_quality_pct<50).sum()) if not out.empty else 0}
-    btc_payload={"signal":btc_signal,"price_change_24h":btc24,"price_change_7d":btc7,"weighted_rsi":btc_wrsi,"rsi_valid_timeframes":len(btc_valid),"rsi_quality_pct":len(btc_valid)/6*100,"rsi_source":btc_rsi_source,"adx":btc_mm.get("adx"),"plus_di":btc_mm.get("pdi"),"minus_di":btc_mm.get("mdi"),"stoch_k":btc_mm.get("stoch_k"),"stoch_d":btc_mm.get("stoch_d"),"ema_bullish":btc_mm.get("ema_bullish"),"daily_breakout":btc_mm.get("daily_breakout"),"weekly_breakout":btc_mm.get("weekly_breakout"),"technical_score":technical_score(btc_mm,btc_wrsi,0,np.nan,len(btc_valid)/6*100),"dominance_pct":dom["current"],"dominance_change_1d":dom["change_1d"],"dominance_change_7d":dom["change_7d"],"dominance_trend":dom["trend"],"total3_btc_ratio":t3["ratio"],"total3_btc_change_1d_pct":t3["change_1d_pct"],"total3_btc_change_7d_pct":t3["change_7d_pct"],"total3_btc_trend":t3["trend"],"fear_greed_value":fg["value"],"fear_greed_classification":fg["classification"],"fear_greed_change_1d":fg["change_1d"]}
-    payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"btc_dominance_pct":dom["current"],"btc_dominance_change_1d":dom["change_1d"],"btc_dominance_change_7d":dom["change_7d"],"btc_dominance_trend":dom["trend"],"total3_btc_ratio":t3["ratio"],"total3_btc_change_1d_pct":t3["change_1d_pct"],"total3_btc_change_7d_pct":t3["change_7d_pct"],"total3_btc_trend":t3["trend"],"fear_greed_value":fg["value"],"fear_greed_classification":fg["classification"],"fear_greed_change_1d":fg["change_1d"],"candidate_count":len(c),"pre_screen_count":len(pre),"ranked_count":len(out),"exchange":primary_exchange,"data_quality":quality_counts},"btc_market":btc_payload,"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
+    btc_payload={"signal":btc_signal,"price_usd":btc_price,"price_change_24h":btc24,"price_change_7d":btc7,"weighted_rsi":btc_wrsi,"rsi_valid_timeframes":len(btc_valid),"rsi_quality_pct":len(btc_valid)/6*100,"rsi_source":btc_rsi_source,"adx":btc_mm.get("adx"),"plus_di":btc_mm.get("pdi"),"minus_di":btc_mm.get("mdi"),"stoch_k":btc_mm.get("stoch_k"),"stoch_d":btc_mm.get("stoch_d"),"ema_bullish":btc_mm.get("ema_bullish"),"daily_breakout":btc_mm.get("daily_breakout"),"weekly_breakout":btc_mm.get("weekly_breakout"),"technical_score":technical_score(btc_mm,btc_wrsi,0,np.nan,len(btc_valid)/6*100),"dominance_pct":dom["current"],"dominance_change_1d":dom["change_1d"],"dominance_change_7d":dom["change_7d"],"dominance_trend":dom["trend"],"total3_btc_ratio":t3["ratio"],"total3_btc_change_1d_pct":t3["change_1d_pct"],"total3_btc_change_7d_pct":t3["change_7d_pct"],"total3_btc_trend":t3["trend"],"fear_greed_value":fg["value"],"fear_greed_classification":fg["classification"],"fear_greed_change_1d":fg["change_1d"]}
+    payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_price_usd":btc_price,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"btc_dominance_pct":dom["current"],"btc_dominance_change_1d":dom["change_1d"],"btc_dominance_change_7d":dom["change_7d"],"btc_dominance_trend":dom["trend"],"total3_btc_ratio":t3["ratio"],"total3_btc_change_1d_pct":t3["change_1d_pct"],"total3_btc_change_7d_pct":t3["change_7d_pct"],"total3_btc_trend":t3["trend"],"fear_greed_value":fg["value"],"fear_greed_classification":fg["classification"],"fear_greed_change_1d":fg["change_1d"],"candidate_count":len(c),"pre_screen_count":len(pre),"ranked_count":len(out),"exchange":primary_exchange,"data_quality":quality_counts},"btc_market":btc_payload,"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
     os.makedirs("data",exist_ok=True); open("data/latest_scan.json","w",encoding="utf-8").write(json.dumps(payload,indent=2,default=str))
 
     statefile="data/telegram_alert_state.json"; state=json.load(open(statefile,encoding="utf-8")) if os.path.exists(statefile) else {"keys":[]}; keys=set(state.get("keys",[])); sent=0
@@ -352,7 +352,7 @@ def main():
     if btc_key not in keys:
         missing_btc=[tf for tf in WEIGHTS if pd.isna(btc_vals.get(tf))]
         fmt=lambda x: "N/A" if pd.isna(x) else f"{x:.2f}"
-        btc_msg=(f"🌐 GENERAL CRYPTO MARKET DIRECTION\n\n{btc_signal}\n\nBTC 24h: {btc24:.2f}%\nBTC 7d: {btc7:.2f}%\n"
+        btc_msg=(f"🌐 GENERAL CRYPTO MARKET DIRECTION\n\n{btc_signal}\n\n₿ BTC PRICE: ${btc_price:,.2f}\nBTC 24h: {btc24:.2f}%\nBTC 7d: {btc7:.2f}%\n"
                  f"BTC Weighted RSI: {fmt(btc_wrsi)}\nBTC RSI coverage: {len(btc_valid)}/6 ({len(btc_valid)/6*100:.0f}%)\n"
                  f"BTC ADX: {fmt(btc_mm.get('adx',np.nan))}\n+DI / -DI: {fmt(btc_mm.get('pdi',np.nan))} / {fmt(btc_mm.get('mdi',np.nan))}\n"
                  f"StochRSI K/D: {fmt(btc_mm.get('stoch_k',np.nan))} / {fmt(btc_mm.get('stoch_d',np.nan))}\nEMA20>EMA50: {btc_mm.get('ema_bullish')}\n"
@@ -377,6 +377,6 @@ def main():
             if ok:keys.add(key); sent+=1
             else: print("Telegram:",err)
     state["keys"]=list(keys)[-1000:]; open(statefile,"w",encoding="utf-8").write(json.dumps(state,indent=2))
-    print(f"{VERSION} scan complete | candidates={len(c)} pre_screen={len(pre)} primary_exchange={primary_exchange} regime={regime} btc={btc_signal} btc_dom={dom['current']}% {dom['trend']} total3btc={t3['ratio']} {t3['trend']} fng={fg['value']} {fg['classification']} telegram_sent={sent}")
+    print(f"{VERSION} scan complete | BTC=${btc_price:,.2f} | candidates={len(c)} pre_screen={len(pre)} primary_exchange={primary_exchange} regime={regime} btc={btc_signal} btc_dom={dom['current']}% {dom['trend']} total3btc={t3['ratio']} {t3['trend']} fng={fg['value']} {fg['classification']} telegram_sent={sent}")
 
 if __name__=="__main__": main()
