@@ -1158,7 +1158,7 @@ def btc_market_context(exchange_name):
     except Exception:
         return None
 
-st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8.4")
+st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8.4.1")
 st.caption("Fast background results + optional deep live breakout analysis")
 
 # Show the latest GitHub Actions background result if available.
@@ -1185,6 +1185,37 @@ try:
             st.dataframe(bgdf[cols].round(2) if not bgdf.empty else bgdf,use_container_width=True,hide_index=True)
 except Exception:
     pass
+
+
+
+def chart_ohlcv(exchange_name, ticker, timeframe="1d", limit=180):
+    """Return completed candles from the cached CCXT exchange resource."""
+    try:
+        ex=get_exchange(exchange_name)
+        symbol=find_market_symbol(ex,ticker)
+        if not symbol:
+            return pd.DataFrame(), None
+        return _completed_ohlcv(ex,symbol,timeframe,limit),symbol
+    except Exception:
+        return pd.DataFrame(), None
+
+def chart_features(d):
+    """Add lightweight chart indicators without invoking the full deep engine."""
+    if d is None or d.empty:
+        return pd.DataFrame()
+    q=d.copy()
+    q["dt"]=pd.to_datetime(q["ts"],unit="ms",utc=True)
+    q["close"]=pd.to_numeric(q["close"],errors="coerce")
+    q["volume"]=pd.to_numeric(q["volume"],errors="coerce")
+    q["EMA20"]=q["close"].ewm(span=20,adjust=False,min_periods=20).mean()
+    q["EMA50"]=q["close"].ewm(span=50,adjust=False,min_periods=50).mean()
+    q["EMA200"]=q["close"].ewm(span=200,adjust=False,min_periods=200).mean()
+    q["RSI14"]=rsi_series(q["close"],14)
+    q["20D High"]=q["high"].rolling(20,min_periods=20).max().shift(1)
+    q["Breakout level"]=q["20D High"]
+    q["Volume MA20"]=q["volume"].rolling(20,min_periods=20).mean()
+    q["RVOL"]=q["volume"]/q["Volume MA20"].replace(0,np.nan)
+    return q.set_index("dt")
 
 # ------------------------------ V8.4 INTEGRATED DASHBOARD ------------------------------
 def _safe_num(v):
@@ -1302,6 +1333,49 @@ if _bg:
 
     _qc=_meta.get("quality_counts",{}) or {}
     st.caption(f"Scan quality: candidates={_meta.get('candidate_count','N/A')} | pre-screen={_meta.get('pre_screen_count','N/A')} | ranked={_meta.get('ranked_count','N/A')} | RSI 6/6={_qc.get('rsi_full','N/A')} | RSI 0/6={_qc.get('rsi_zero','N/A')}")
+
+
+
+# ------------------------------ V8.4.1 CHARTS ------------------------------
+st.subheader("📈 Market & Coin Charts")
+_chart_cols=st.columns(2)
+with _chart_cols[0]:
+    st.markdown("**BTC price / trend / breakout structure**")
+    _btc_chart,_btc_symbol=chart_ohlcv(exchange,"BTC","1d",220)
+    if not _btc_chart.empty:
+        _bcf=chart_features(_btc_chart)
+        _st=st.multiselect("BTC chart series",["close","EMA20","EMA50","EMA200","20D High"],default=["close","EMA20","EMA50"],key="btc_chart_series")
+        if _st:
+            st.line_chart(_bcf[_st].dropna(how="all"),height=360)
+        st.caption(f"Source: {exchange.upper()} {_btc_symbol or 'N/A'} | completed daily candles | breakout level = prior 20-day high")
+    else:
+        st.info("BTC chart data unavailable from the selected exchange.")
+with _chart_cols[1]:
+    st.markdown("**Selected coin price / RSI / breakout structure**")
+    _chart_ticker=None
+    if '_selected' in globals() and _selected:
+        _chart_ticker=_selected
+    elif '_tickers' in globals() and _tickers:
+        _chart_ticker=_tickers[0]
+    if _chart_ticker:
+        _coin_chart,_coin_symbol=chart_ohlcv(exchange,_chart_ticker,"1d",220)
+        if not _coin_chart.empty:
+            _ccf=chart_features(_coin_chart)
+            _cs=st.multiselect("Coin price series",["close","EMA20","EMA50","EMA200","20D High"],default=["close","EMA20","EMA50"],key="coin_chart_series")
+            if _cs:
+                st.line_chart(_ccf[_cs].dropna(how="all"),height=360)
+            st.caption(f"Source: {exchange.upper()} {_coin_symbol or 'N/A'} | {_chart_ticker} | completed daily candles")
+        else:
+            st.info(f"No {exchange.upper()} spot market data available for {_chart_ticker}.")
+st.markdown("**Selected coin RSI-14**")
+if _chart_ticker and not _coin_chart.empty:
+    _rsi_chart=_ccf[["RSI14"]].dropna()
+    st.line_chart(_rsi_chart,height=240)
+    _last_rsi=float(_rsi_chart["RSI14"].iloc[-1]) if not _rsi_chart.empty else np.nan
+    _last_rvol=float(_ccf["RVOL"].iloc[-1]) if pd.notna(_ccf["RVOL"].iloc[-1]) else np.nan
+    st.caption(f"{_chart_ticker} daily RSI-14: {_fmt(_last_rsi)} | RVOL(20): {_fmt(_last_rvol,'x',2)} | RSI reference: <30 oversold, 40–60 neutral, >70 overbought.")
+else:
+    st.info("Select a coin in Coin Deep Dive above to populate its chart.")
 
 # ------------------------------ V8 DASHBOARD ------------------------------
 with st.sidebar:
@@ -1467,7 +1541,7 @@ if run or st.session_state.run:
                 st.caption(f"Telegram alerts: {tg_result.get('sent',0)} new alert(s), {tg_result.get('skipped',0)} duplicate(s) suppressed.")
         else:
             st.caption("Telegram alerts are disabled until TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are configured.")
-        st.subheader("TRUE BREAKOUT PRO v8.4 — Deep ranking")
+        st.subheader("TRUE BREAKOUT PRO v8.4.1 — Deep ranking")
         st.dataframe(finaldf.round(2),use_container_width=True,hide_index=True)
 
         # Focus table: strongest structural candidates only.
