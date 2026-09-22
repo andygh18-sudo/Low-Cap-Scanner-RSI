@@ -1287,12 +1287,21 @@ if _bg:
         st.subheader("📊 Multi-Timeframe RSI")
         _heat=[]
         for _,_rr in _bgdf.iterrows():
+            # Background GitHub Actions scans persist RSI as rsi_1h ... rsi_3m
+            # rather than a nested rsi dictionary. Reconstruct the canonical
+            # six-timeframe map here, while still supporting older scan files
+            # that stored a nested dictionary.
             _rv=_rr.get("rsi") or _rr.get("mtf_rsi") or {}
-            if not isinstance(_rv,dict) or not _rv:
+            if not isinstance(_rv,dict):
+                _rv={}
+            _tf_cols={"1H":"rsi_1h","4H":"rsi_4h","1D":"rsi_1d","1W":"rsi_1w","1M":"rsi_1m","3M":"rsi_3m"}
+            _has_columns=any(c in _rr.index for c in _tf_cols.values())
+            if not _rv and not _has_columns:
                 continue
             _hr={"Coin":_rr.get("coin",""),"Ticker":str(_rr.get("ticker","")).upper()}
-            for _tf in ["1H","4H","1D","1W","1M","3M"]:
-                _hr[_tf]=_safe_num(_rv.get(_tf))
+            for _tf,_col in _tf_cols.items():
+                _value=_rv.get(_tf, _rr.get(_col, np.nan))
+                _hr[_tf]=_safe_num(_value)
             _hr["Weighted RSI"]=_safe_num(_rr.get("weighted_rsi"))
             _vals=[_hr[_tf] for _tf in ["1H","4H","1D","1W","1M","3M"] if pd.notna(_hr[_tf])]
             _hr["RSI coverage"]=f"{len(_vals)}/6"
