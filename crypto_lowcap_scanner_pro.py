@@ -1158,8 +1158,8 @@ def btc_market_context(exchange_name):
     except Exception:
         return None
 
-st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8 Scanner")
-st.caption("v8.3: fast pre-screen + deep technical breakout engine + cached exchange resources")
+st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8.3")
+st.caption("Fast background results + optional deep live breakout analysis")
 
 # Show the latest GitHub Actions background result if available.
 try:
@@ -1167,11 +1167,21 @@ try:
         with open("data/latest_scan.json", "r") as f:
             bg=__import__("json").load(f)
         bm=bg.get("meta", {})
-        st.info(f"Background scan: {bm.get('generated_at','not run yet')} | Regime: {bm.get('regime','N/A')} | BTC 24h: {bm.get('btc_24h','N/A')}% | BTC 7d: {bm.get('btc_7d','N/A')}%")
+        btc_bg=bg.get("btc_market",{})
+        st.subheader("🌐 General Crypto Market Direction")
+        st.caption(f"Background scan: {bm.get('generated_at','not run yet')} | Engine: {bm.get('engine_version','N/A')}")
+        m1,m2,m3,m4,m5,m6=st.columns(6)
+        m1.metric("BTC Direction", str(btc_bg.get("signal","N/A")).replace("🟢 ","").replace("🔴 ","").replace("🟡 ","").replace("🟠 ","").replace("⚪ ",""))
+        m2.metric("BTC Price", f"$ {float(bm.get('btc_price_usd',np.nan)):,.0f}" if pd.notna(bm.get('btc_price_usd',np.nan)) else "N/A")
+        m3.metric("BTC 24h", f"{float(bm.get('btc_24h',np.nan)):+.2f}%" if pd.notna(bm.get('btc_24h',np.nan)) else "N/A")
+        m4.metric("BTC 7d", f"{float(bm.get('btc_7d',np.nan)):+.2f}%" if pd.notna(bm.get('btc_7d',np.nan)) else "N/A")
+        m5.metric("BTC Dominance", f"{float(bm.get('btc_dominance_pct',np.nan)):.2f}%" if pd.notna(bm.get('btc_dominance_pct',np.nan)) else "N/A")
+        m6.metric("USDT Dominance", f"{float(bm.get('usdt_dominance_pct',np.nan)):.2f}%" if pd.notna(bm.get('usdt_dominance_pct',np.nan)) else "N/A")
+        st.caption(f"BTC dominance: {bm.get('btc_dominance_trend','N/A')} | USDT dominance: {bm.get('usdt_dominance_trend','N/A')} | TOTAL3/BTC: {bm.get('total3_btc_trend','N/A')} | Fear & Greed: {bm.get('fear_greed_value','N/A')} — {bm.get('fear_greed_classification','N/A')} | Altcoin breadth: {bm.get('breadth','N/A'):.1f}%")
         if bg.get("top10"):
             st.subheader("⭐ Latest Background Top 10")
             bgdf=pd.DataFrame(bg["top10"])
-            cols=[c for c in ["coin","ticker","score","signal","weighted_rsi","btc_rel_7d_pct","vol_mcap_pct","downside_beta","btc_down_day_rel_pct"] if c in bgdf.columns]
+            cols=[c for c in ["coin","ticker","technical_score","breakout_state","weighted_rsi","btc_rel_7d_pct","vol_mcap_pct","downside_beta","btc_down_day_rel_pct","rsi_quality_pct"] if c in bgdf.columns]
             st.dataframe(bgdf[cols].round(2) if not bgdf.empty else bgdf,use_container_width=True,hide_index=True)
 except Exception:
     pass
@@ -1185,12 +1195,12 @@ with st.sidebar:
     minvr=st.number_input("Min volume / market cap (%)", min_value=0.0, max_value=100.0, value=5.0, step=1.0, format="%.1f", key="v8_minvr")
     preselect=st.slider("Fast pre-screen size", min_value=50, max_value=100, value=60, step=10, key="v8_preselect")
     deep_count=st.slider("Deep technical analysis", min_value=10, max_value=25, value=15, step=5, key="v8_deep_count")
-    exchange=st.selectbox("Exchange candles",["bybit","okx","kraken"],index=0, key="v8_exchange")
+    exchange=st.selectbox("Exchange candles",["okx","kraken","bybit"],index=0, key="v8_exchange")
     run=st.button("🚀 Run full scanner",type="primary", key="v8_run")
     st.caption("The dashboard loads the latest GitHub Actions scan by default. Run the live technical engine only when you need fresh exchange candles.")
     st.caption("v8 analyses a broad pre-screen before applying the expensive structural breakout engine. ZEN is always retained.")
 
-st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8")
+st.title("🔬 Live Deep Technical Analysis")
 st.caption("v8.3 two-stage engine: 50–100 fast candidates → 10–25 deep technical candidates")
 
 if "run" not in st.session_state: st.session_state.run=False
