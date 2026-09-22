@@ -413,7 +413,7 @@ def _exchange_daily_closes(ticker, exchange_names=("bybit", "okx", "kraken")):
     return pd.Series(dtype=float), None
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def daily_stochrsi_with_source(coin_id, ticker=None):
     """Daily StochRSI returning %K, %D and the actual data source used."""
     for days in (90, 365):
@@ -578,12 +578,17 @@ _ANALYSIS_CACHE = {}
 _DERIV_CACHE = {}
 
 
+@st.cache_resource(ttl=3600, show_spinner=False)
+def _streamlit_exchange(exchange_name):
+    """Cache one CCXT exchange resource across Streamlit reruns."""
+    ex = getattr(ccxt, str(exchange_name).lower())({"enableRateLimit": True})
+    ex.load_markets()
+    return ex
+
 def get_exchange(exchange_name):
     name = str(exchange_name).lower()
     if name not in _EXCHANGE_CACHE:
-        ex = getattr(ccxt, name)({"enableRateLimit": True})
-        ex.load_markets()
-        _EXCHANGE_CACHE[name] = ex
+        _EXCHANGE_CACHE[name] = _streamlit_exchange(name)
     return _EXCHANGE_CACHE[name]
 
 
@@ -885,6 +890,7 @@ def derivatives_history(ex,ticker):
     return dict(out)
 
 
+@st.cache_data(ttl=300, show_spinner=False, max_entries=500)
 def analysis_bundle(exchange_name, coin_row):
     """Compute all reusable technical evidence once per coin."""
     ticker=str(coin_row["symbol"]).upper(); cid=str(coin_row["id"]); key=(str(exchange_name).lower(),cid,ticker)
@@ -1180,18 +1186,23 @@ with st.sidebar:
     preselect=st.slider("Technical pre-screen size", min_value=50, max_value=100, value=60, step=10, key="v8_preselect")
     exchange=st.selectbox("Exchange candles",["bybit","okx","kraken"],index=0, key="v8_exchange")
     run=st.button("🚀 Run full scanner",type="primary", key="v8_run")
+    st.caption("The dashboard loads the latest GitHub Actions scan by default. Run the live technical engine only when you need fresh exchange candles.")
     st.caption("v8 analyses a broad pre-screen before applying the expensive structural breakout engine. ZEN is always retained.")
 
 st.title("₿ Crypto Low-Cap TRUE BREAKOUT PRO v8")
 st.caption("Cached technical engine + 50–100 pre-screen + breakout lifecycle + supply quality + downside resilience")
 
-if "run" not in st.session_state: st.session_state.run=True
+if "run" not in st.session_state: st.session_state.run=False
 if run or st.session_state.run:
     try:
         with st.spinner("Loading market universe with CoinGecko 429 protection…"):
             df=cg_markets()
         if df.empty:
             st.error("No market-universe data returned.")
+            st.stop()
+
+        if not run and not st.session_state.run:
+            st.info("Live technical bundles are paused. The latest background scan above is shown without rebuilding exchange indicators. Click **Run full scanner** when you want fresh technical data.")
             st.stop()
         warning=getattr(df,"attrs",{}).get("coingecko_warning")
         if warning: st.warning(str(warning)+" — continuing with available universe.")
@@ -1223,12 +1234,15 @@ if run or st.session_state.run:
         view.columns=["Coin","Ticker","MCap $M","Vol $M","Vol/MCap %","24h %","7d %","BTC-rel 7d %","Pre-screen score"]
         st.dataframe(view.round(2),use_container_width=True,hide_index=True)
 
-        # One analysis bundle per pre-screen coin. This is the core v8 cache architecture.
+        # One analysis bundle per pre-screen coin. Streamlit now persists the
+        # complete bundle for 5 minutes, including the expensive CCXT-derived
+        # indicators. This prevents every widget interaction from rebuilding
+        # all 50–100 bundles.
         bundles={}
-        progress=st.progress(0,text="Building cached technical bundles…")
+        progress=st.progress(0,text="Building technical bundles (first run only)…")
         total=max(1,len(presel))
         for i,(_,x) in enumerate(presel.iterrows(),1):
-            bundles[str(x["id"])] = analysis_bundle(exchange,x)
+            bundles[str(x["id"])] = analysis_bundle(exchange, x.to_dict())
             progress.progress(i/total,text=f"Analysing {i}/{total}: {str(x['symbol']).upper()}")
         progress.empty()
 
