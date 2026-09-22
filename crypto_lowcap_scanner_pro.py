@@ -167,7 +167,7 @@ def cg_markets():
     """CoinGecko Top 500 universe with 429 protection.
 
     If page 2 is temporarily rate-limited, page 1 is retained so the
-    scanner can still run; ZEN is explicitly re-added downstream.
+    scanner can still run with the available CoinGecko universe.
     """
     frames=[]
     warning=None
