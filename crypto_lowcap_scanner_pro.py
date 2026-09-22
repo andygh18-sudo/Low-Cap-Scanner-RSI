@@ -1318,12 +1318,8 @@ if _bg:
         st.subheader("🎯 Coin Deep Dive — Background")
         _tickers=sorted(_bgdf["ticker"].dropna().astype(str).str.upper().unique()) if "ticker" in _bgdf else []
 
-        # Dedicated RSI-14 coin selector. This is intentionally separate from
-        # the general coin selector so the RSI chart always has its own control.
-        _rsi14_options=_tickers.copy()
-        if "ZEN" not in _rsi14_options:
-            _rsi14_options.append("ZEN")
-        _rsi14_options=sorted(set(_rsi14_options))
+        # Dedicated RSI-14 selector inside Coin Deep Dive.
+        _rsi14_options=sorted(set(_tickers + ["ZEN"]))
         _rsi14_selected=None
         if _rsi14_options:
             _rsi14_default=_rsi14_options.index("ZEN") if "ZEN" in _rsi14_options else 0
@@ -1358,8 +1354,6 @@ if _bg:
                     _q=[c for c in ["downside_beta","btc_down_day_rel_pct","btc_down_day_outperform_pct","oi_1d_pct","oi_3d_pct","oi_7d_pct","funding","derivatives_state","supply_score","circ_pct_max","fdv_mcap","unlock_risk"] if c in _z.index]
                     st.dataframe(pd.DataFrame({"Metric":_q,"Value":[_z[c] for c in _q]}),hide_index=True,use_container_width=True)
 
-        # Show the selected coin's actual daily RSI-14 independently of the
-        # background scan's stored MTF RSI fields.
         if _rsi14_selected:
             _rsi14_cand,_rsi14_symbol=chart_ohlcv(exchange,_rsi14_selected,"1d",220)
             if not _rsi14_cand.empty:
@@ -1533,3 +1527,111 @@ if run or st.session_state.run:
         for i,(_,x) in enumerate(deep.iterrows(),1):
             bundles[str(x["id"])] = analysis_bundle(exchange, x.to_dict())
             progress.progress(i/total,text=f"Deep analysis {i}/{total}: {str(x['symbol']).upper()}")
+        progress.empty()
+
+        # RSI heatmap is now focused on the deep-analysis set rather than
+        # forcing 50–100 expensive MTF calculations.
+        rows=[]
+        for _,x in deep.iterrows():
+            b=bundles[str(x.id)]; vals=b["rsi"]; row={"Coin":x["name"],"Ticker":str(x["symbol"]).upper(),**vals,"Weighted RSI":b["weighted_rsi"]}
+            row["Deep oversold"]=sum(pd.notna(v) and v<30 for v in vals.values())>=2
+            row["Bullish alignment"]=sum(pd.notna(v) and v>=60 for v in vals.values())>=4
+            row["Bearish alignment"]=sum(pd.notna(v) and v<=40 for v in vals.values())>=4
+            row["Overbought"]=sum(pd.notna(v) and v>70 for v in vals.values())>=3
+            rows.append(row)
+        heat=pd.DataFrame(rows)
+        # Never expose Python None/NaN as the Weighted RSI value. If a coin has
+        # at least one valid timeframe, recompute directly from the displayed
+        # RSI dictionary; otherwise show N/A explicitly.
+        if not heat.empty:
+            heat["Weighted RSI"] = heat.apply(
+                lambda r: weighted_rsi_from_values({tf: r.get(tf, np.nan) for tf in ["1H","4H","1D","1W","1M","3M"]}),
+                axis=1
+            )
+        st.subheader("Multi-timeframe RSI heatmap — cached")
+        st.dataframe(heat.round(1),use_container_width=True,hide_index=True)
+
+        # Simple regime context remains separate from technical score.
+        breadth=float((candidates["price_change_percentage_24h"]>0).mean()*100) if len(candidates) else 0
+        if btc24>2 and btc7>3 and breadth>=55: regime="RISK-ON"; regime_score=85
+        elif btc24<-3 and btc7<-5 and breadth<35: regime="RISK-OFF"; regime_score=25
+        else: regime="MIXED / TRANSITION"; regime_score=55
+        r1,r2,r3=st.columns(3); r1.metric("Regime",regime); r2.metric("Low-cap breadth",f"{breadth:.0f}%"); r3.metric("Regime score",regime_score)
+
+        final=[]
+        for _,x in deep.iterrows():
+            b=bundles[str(x.id)]; m=dict(b["metrics"]); m["vr"]=float(x["vr"]); rs=b["weighted_rsi"]; sk=b["stoch_k"]; sd=b["stoch_d"]; av=b["adx"]; pdi=b["pdi"]; mdi=b["mdi"]; ap=b["adx_prev"]; btc_rel=float(x["btc_rel_7d"]); base=b["base"]; supply=b["supply"]; der=b["deriv"]
+            m.update({"btc_down_day_rel_pct":b["down_rel"]})
+            tech=technical_score_v8(m,rs,btc_rel,base,supply,b["down_rel"],b["down_hit"])
+            confidence=confidence_v8(m,rs,sk,sd,av,pdi,mdi,ap,btc_rel)
+            true_break=is_true_breakout(m,btc_rel,float(x["vr"]),rs,sk,sd,av,pdi,mdi,ap)
+            state=breakout_state(m)
+            # Risk-adjusted score is separate from technical score.
+            risk_adj=tech*(0.70+0.003*regime_score)
+            if pd.notna(supply.get("supply_score")): risk_adj += (supply["supply_score"]-50)*0.05
+            if pd.notna(b["down_hit"]): risk_adj += (b["down_hit"]-50)*0.04
+            if pd.notna(b["down_rel"]): risk_adj += np.clip(b["down_rel"]*0.3,-5,5)
+            risk_adj=float(np.clip(risk_adj,0,100))
+            extended=bool((pd.notna(rs) and rs>=80) or (pd.notna(m.get("breakout_distance_pct")) and m["breakout_distance_pct"]>2))
+            if m.get("breakout_failed"): status="🚨 BREAKOUT FAILED"
+            elif true_break and confidence>=90 and not extended: status="🚀 HIGH-CONVICTION TRUE BREAKOUT"
+            elif true_break and extended: status="🚀 TRUE BREAKOUT — EXTENDED / WAIT FOR RETEST"
+            elif true_break: status="🟢 TRUE BREAKOUT"
+            elif confidence>=80: status="🟢 BREAKOUT CONFIRMATION"
+            elif state=="🟡 BREAKOUT ATTEMPT": status="🟡 BREAKOUT WATCH"
+            elif risk_adj>=75: status="🟢 STRONG SETUP"
+            elif risk_adj>=60: status="🟢 MOMENTUM CONFIRMED"
+            elif risk_adj>=45: status="🟡 WATCH / PULLBACK"
+            else: status="🔴 WEAK"
+            final.append({
+                "Coin":x["name"],"Ticker":str(x["symbol"]).upper(),"Technical score":round(tech,1),"Risk-adjusted score":round(risk_adj,1),"Signal":status,"Breakout state":state,"Breakout confidence":round(confidence,1),"Weighted RSI":round(rs,1) if pd.notna(rs) else np.nan,"BTC-rel 7d %":round(btc_rel,1),"Vol/MCap %":round(float(x["vr"]),1),"MCap $M":round(float(x["mcap_m"]),1),"24h %":round(float(x["price_change_percentage_24h"]),1),
+                "Daily breakout":m.get("daily_breakout",False),"Weekly breakout":m.get("weekly_breakout",False),"Volume confirmed":m.get("volume_confirmed",False),"OBV breakout":m.get("obv_breakout",False),"ATR expanding":m.get("atr_expanding",False),"EMA bullish":m.get("ema_bullish",False),"Breakout accepted":m.get("breakout_accepted",False),"Retest held":m.get("breakout_retest_held",False),"Breakout distance %":m.get("breakout_distance_pct",np.nan),"RVOL 5D":m.get("rvol5",np.nan),
+                "Base quality":base.get("base_quality",np.nan),"Base range %":base.get("base_range_pct",np.nan),"Supply score":supply.get("supply_score",np.nan),"Circulating % max":supply.get("circ_pct_max",np.nan),"FDV/MCap":supply.get("fdv_mcap",np.nan),"Unlock risk":supply.get("unlock_risk","N/A"),
+                "Downside beta":b["down_beta"],"BTC-down-day rel %":b["down_rel"],"BTC-down-day outperform %":b["down_hit"],"OI 1D %":der.get("oi_1d_pct",np.nan),"OI 3D %":der.get("oi_3d_pct",np.nan),"OI 7D %":der.get("oi_7d_pct",np.nan),"Funding":der.get("funding",np.nan),"Funding 3D avg":der.get("funding_avg_3d",np.nan),"Derivatives state":der.get("derivatives_state","N/A"),
+                "StochRSI %K":sk,"StochRSI %D":sd,"ADX":av,"+DI":pdi,"-DI":mdi,"ADX rising":bool(pd.notna(av) and pd.notna(ap) and av>ap),"Data sources":f"RSI: cached engine | Stoch: {b['stoch_source']} | ADX: {b['adx_source']} | OHLCV: {exchange.upper()}"
+            })
+        finaldf=pd.DataFrame(final).sort_values("Risk-adjusted score",ascending=False)
+
+        # Telegram notifications use the same final ranking dataframe as the UI,
+        # so alerts cannot diverge from what the scanner displays.
+        tg_result = send_scanner_telegram_alerts(finaldf, regime, btc24, btc7) if live_telegram else {"enabled": False, "sent": 0, "skipped": 0, "error": None}
+        if TELEGRAM_ENABLED:
+            if tg_result.get("error"):
+                st.warning(f"Telegram alert issue: {tg_result['error']}")
+            else:
+                st.caption(f"Telegram alerts: {tg_result.get('sent',0)} new alert(s), {tg_result.get('skipped',0)} duplicate(s) suppressed.")
+        else:
+            st.caption("Telegram alerts are disabled until TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are configured.")
+        st.subheader("TRUE BREAKOUT PRO v8.4.1 — Deep ranking")
+        st.dataframe(finaldf.round(2),use_container_width=True,hide_index=True)
+
+        # Focus table: strongest structural candidates only.
+        focus=finaldf[(finaldf["Signal"].str.contains("BREAKOUT|SETUP",regex=True)) | finaldf["Ticker"].eq("ZEN")].head(15)
+        st.subheader("⭐ Breakout focus")
+        st.dataframe(focus.round(2),use_container_width=True,hide_index=True)
+
+        st.subheader("v8.3 architecture / rules")
+        st.markdown("""
+**1. Two-stage engine:** Stage 1 ranks 50–100 candidates using market-data momentum/liquidity; Stage 2 deeply analyses only the top 10–25.
+
+**2. Broad pre-screen:** 50–100 candidates enter Stage 1; ZEN is always retained. Only the deep subset reaches the expensive structural engine.
+
+**3. Clean scoring:** Technical Quality is 0–100; Regime Score and Risk-Adjusted Score are separate.
+
+**4. TRUE BREAKOUT:** retains the v7 structural gate — daily/weekly breakout, volume, candle quality, ATR distance/expansion, OBV, BTC-relative strength, RSI, StochRSI, ADX/DMI and EMA alignment.
+
+**5. Breakout lifecycle:** BASE → BREAKOUT ATTEMPT → BREAKOUT ACCEPTED → RETEST HELD, with explicit BREAKOUT FAILED state.
+
+**6. Derivatives:** current OI/funding plus recent OI/funding history when the exchange supports the CCXT unified methods; derivatives are context, not an automatic buy/sell gate.
+
+**7. Base quality:** measures pre-breakout consolidation range, ATR and Bollinger compression.
+
+**8. Supply quality:** circulating/max supply and FDV/MCap are included. Unlock schedules are explicitly shown as N/A because they are not available from the current CoinGecko market-universe response; v8 does not invent unlock data.
+
+**9. Downside resilience:** BTC-down-day beta, average relative performance and outperform rate are timestamp-aligned.
+
+**10. Data reuse:** deep RSI, StochRSI, ADX, OHLCV, derivatives and downside-resilience results are cached and reused across the deep ranking and heatmap.
+        """)
+        st.caption("v8 is a research/ranking engine. It does not execute trades or guarantee outcomes.")
+    except Exception as e:
+        st.error(f"Scanner error: {e}")
