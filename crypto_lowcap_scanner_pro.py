@@ -52,6 +52,93 @@ if COINGECKO_API_KEY:
 CG_RETRIES = 5
 CG_BACKOFF_BASE = 2.0
 
+# ------------------------------ TELEGRAM ALERTS ------------------------------
+# Credentials are read from environment variables so they are never stored in
+# the source file. Telegram Bot API sendMessage requires a chat_id and text.
+TELEGRAM_BOT_TOKEN = __import__("os").getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = __import__("os").getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+TELEGRAM_TIMEOUT = 20
+TELEGRAM_MIN_CONFIDENCE = float(__import__("os").getenv("TELEGRAM_MIN_CONFIDENCE", "80"))
+
+def telegram_send(message, disable_notification=False):
+    """Send a Telegram alert; silently no-op when credentials are absent."""
+    if not TELEGRAM_ENABLED:
+        return False, "Telegram not configured"
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": str(message)[:4096],
+                   "disable_notification": bool(disable_notification)}
+        r = requests.post(url, json=payload, timeout=TELEGRAM_TIMEOUT)
+        data = r.json()
+        if not data.get("ok"):
+            return False, str(data.get("description", "Telegram API error"))
+        return True, "sent"
+    except Exception as exc:
+        return False, str(exc)
+
+def telegram_alert_key(row):
+    """Stable key used to prevent duplicate alerts across scanner reruns."""
+    return "|".join([str(row.get("Ticker", "")), str(row.get("Signal", "")),
+                      str(row.get("Breakout state", "")),
+                      str(row.get("Technical score", "")),
+                      str(row.get("Weighted RSI", ""))])
+
+def send_scanner_telegram_alerts(finaldf, regime, btc24, btc7):
+    """Send only newly observed qualifying signals. State is persisted locally."""
+    if not TELEGRAM_ENABLED or finaldf is None or finaldf.empty:
+        return {"enabled": TELEGRAM_ENABLED, "sent": 0, "skipped": 0, "error": None}
+    import json, os
+    state_path = "data/telegram_alert_state.json"
+    os.makedirs("data", exist_ok=True)
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+    except Exception:
+        state = {"sent_keys": []}
+    sent_keys = set(state.get("sent_keys", []))
+    sent = skipped = 0
+    errors = []
+    for _, row in finaldf.iterrows():
+        signal = str(row.get("Signal", ""))
+        confidence = float(row.get("Breakout confidence", 0) or 0)
+        is_alert = ("TRUE BREAKOUT" in signal or "BREAKOUT CONFIRMATION" in signal
+                    or "BREAKOUT FAILED" in signal or "BREAKOUT WATCH" in signal
+                    or (str(row.get("Ticker", "")).upper() == "ZEN" and confidence >= TELEGRAM_MIN_CONFIDENCE))
+        if not is_alert or confidence < TELEGRAM_MIN_CONFIDENCE and "FAILED" not in signal:
+            continue
+        key = telegram_alert_key(row)
+        if key in sent_keys:
+            skipped += 1
+            continue
+        text = (f"{signal}\n\n"
+                f"{row.get('Coin','')} ({row.get('Ticker','')})\n"
+                f"Technical score: {row.get('Technical score','N/A')}\n"
+                f"Risk-adjusted score: {row.get('Risk-adjusted score','N/A')}\n"
+                f"Breakout state: {row.get('Breakout state','N/A')}\n"
+                f"Confidence: {row.get('Breakout confidence','N/A')}\n"
+                f"Weighted RSI: {row.get('Weighted RSI','N/A')}\n"
+                f"BTC-relative 7D: {row.get('BTC-rel 7d %','N/A')}%\n"
+                f"Vol/MCap: {row.get('Vol/MCap %','N/A')}%\n"
+                f"ADX: {row.get('ADX','N/A')} | +DI: {row.get('+DI','N/A')} | -DI: {row.get('-DI','N/A')}\n"
+                f"OI 3D: {row.get('OI 3D %','N/A')}% | Funding: {row.get('Funding','N/A')}\n"
+                f"Regime: {regime} | BTC 24h: {btc24:.2f}% | BTC 7d: {btc7:.2f}%")
+        ok, err = telegram_send(text)
+        if ok:
+            sent_keys.add(key); sent += 1
+        else:
+            errors.append(f"{row.get('Ticker','')}: {err}")
+    # Keep the state bounded while retaining recent deduplication history.
+    state["sent_keys"] = list(sent_keys)[-1000:]
+    try:
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception as exc:
+        errors.append(f"state file: {exc}")
+    return {"enabled": True, "sent": sent, "skipped": skipped,
+            "error": "; ".join(errors) if errors else None}
+
+
 def _cg_get(path, params=None, timeout=30):
     """CoinGecko GET with 429-aware exponential backoff and jitter."""
     url = f"{CG}/{path.lstrip('/')}"
@@ -1206,6 +1293,17 @@ if run or st.session_state.run:
                 "StochRSI %K":sk,"StochRSI %D":sd,"ADX":av,"+DI":pdi,"-DI":mdi,"ADX rising":bool(pd.notna(av) and pd.notna(ap) and av>ap),"Data sources":f"RSI: cached engine | Stoch: {b['stoch_source']} | ADX: {b['adx_source']} | OHLCV: {exchange.upper()}"
             })
         finaldf=pd.DataFrame(final).sort_values("Risk-adjusted score",ascending=False)
+
+        # Telegram notifications use the same final ranking dataframe as the UI,
+        # so alerts cannot diverge from what the scanner displays.
+        tg_result = send_scanner_telegram_alerts(finaldf, regime, btc24, btc7)
+        if TELEGRAM_ENABLED:
+            if tg_result.get("error"):
+                st.warning(f"Telegram alert issue: {tg_result['error']}")
+            else:
+                st.caption(f"Telegram alerts: {tg_result.get('sent',0)} new alert(s), {tg_result.get('skipped',0)} duplicate(s) suppressed.")
+        else:
+            st.caption("Telegram alerts are disabled until TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are configured.")
         st.subheader("TRUE BREAKOUT PRO v8 — final ranking")
         st.dataframe(finaldf.round(2),use_container_width=True,hide_index=True)
 
