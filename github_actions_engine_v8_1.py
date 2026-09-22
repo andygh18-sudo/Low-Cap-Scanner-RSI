@@ -276,7 +276,7 @@ def btc_direction(btc24,btc7,wrsi,m,dom):
 
 def main():
     df=markets(); df["mcap_m"]=df.market_cap/1e6; df["vol_m"]=df.total_volume/1e6; df["vr"]=df.total_volume/df.market_cap*100
-    btc=df[df.id=="bitcoin"].iloc[0]; btc7=float(btc.price_change_percentage_7d or btc.price_change_percentage_7d_in_currency or 0); btc24=float(btc.price_change_percentage_24h or 0)
+    btc=df[df.id=="bitcoin"].iloc[0]; btc7=float(btc.get("price_change_percentage_7d_in_currency",0) or 0); btc24=float(btc.get("price_change_percentage_24h",0) or 0)
     dom=btc_dominance()
     t3=total3_btc()
     fg=fear_greed()
