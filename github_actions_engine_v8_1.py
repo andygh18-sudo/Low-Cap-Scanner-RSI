@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import ccxt
 
-VERSION = "v8.2.2"
+VERSION = "v8.2.3"
 CG = "https://api.coingecko.com/api/v3"
 ZEN_ID = "horizen"
 WEIGHTS = {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}
@@ -36,6 +36,32 @@ def markets():
     except Exception as e:
         print(f"ZEN direct fetch failed: {type(e).__name__}: {e}")
     return pd.concat(frames,ignore_index=True).drop_duplicates("id")
+
+def btc_dominance():
+    current=np.nan; d1=np.nan; d7=np.nan
+    try:
+        g=cg_get("global")
+        current=float(g.get("data",{}).get("market_cap_percentage",{}).get("btc",np.nan))
+    except Exception as e:
+        print(f"BTC dominance current failed: {type(e).__name__}: {e}")
+    # CoinGecko global market-cap history includes historical BTC dominance.
+    try:
+        h=cg_get("global/market_cap_chart",{"vs_currency":"usd","days":"7"})
+        pct=h.get("market_cap_percentage",{})
+        btc_hist=pct.get("btc") or pct.get("bitcoin") or []
+        if btc_hist:
+            vals=pd.Series([float(x[1]) for x in btc_hist if len(x)>=2])
+            if len(vals):
+                d1=float(vals.iloc[-1]-vals.iloc[max(0,len(vals)-24*1)-1]) if len(vals)>24 else float(vals.iloc[-1]-vals.iloc[0])
+                d7=float(vals.iloc[-1]-vals.iloc[0])
+                current=float(vals.iloc[-1]) if pd.isna(current) else current
+    except Exception as e:
+        print(f"BTC dominance history failed: {type(e).__name__}: {e}")
+    if pd.isna(current): return {"current":np.nan,"change_1d":np.nan,"change_7d":np.nan,"trend":"N/A"}
+    if pd.notna(d7) and d7>=0.50: trend="📈 BTC DOMINANCE RISING"
+    elif pd.notna(d7) and d7<=-0.50: trend="📉 BTC DOMINANCE FALLING"
+    else: trend="➡️ BTC DOMINANCE FLAT"
+    return {"current":current,"change_1d":d1,"change_7d":d7,"trend":trend}
 
 def exchange(name):
     k=f"ex:{name}"
@@ -178,13 +204,16 @@ def telegram(msg):
         return bool(j.get("ok")),j.get("description","")
     except Exception as e:return False,str(e)
 
-def btc_direction(btc24,btc7,wrsi,m):
+def btc_direction(btc24,btc7,wrsi,m,dom):
     score=0
     score += 2 if btc24>2 else (-2 if btc24<-2 else 0)
     score += 2 if btc7>5 else (-2 if btc7<-5 else 0)
     score += 2 if pd.notna(wrsi) and wrsi>=60 else (-2 if pd.notna(wrsi) and wrsi<=40 else 0)
     score += 2 if m.get("ema_bullish") else (-2 if m and not m.get("ema_bullish") else 0)
     score += 1 if pd.notna(m.get("adx")) and m["adx"]>=25 and m.get("pdi",0)>m.get("mdi",0) else (-1 if pd.notna(m.get("adx")) and m["adx"]>=25 and m.get("mdi",0)>m.get("pdi",0) else 0)
+    # Dominance is reported as context; it does not override BTC price trend.
+    if dom.get("change_7d",np.nan) >= 0.50: score += 1
+    elif dom.get("change_7d",np.nan) <= -0.50: score -= 1
     if score>=5:return "🟢 BTC BULLISH / RISK-ON"
     if score<=-5:return "🔴 BTC BEARISH / RISK-OFF"
     if score>=2:return "🟡 BTC LEANING BULLISH"
@@ -194,6 +223,7 @@ def btc_direction(btc24,btc7,wrsi,m):
 def main():
     df=markets(); df["mcap_m"]=df.market_cap/1e6; df["vol_m"]=df.total_volume/1e6; df["vr"]=df.total_volume/df.market_cap*100
     btc=df[df.id=="bitcoin"].iloc[0]; btc7=float(btc.price_change_percentage_7d or btc.price_change_percentage_7d_in_currency or 0); btc24=float(btc.price_change_percentage_24h or 0)
+    dom=btc_dominance()
     stable={"tether","usd-coin","dai","usds","true-usd","usdd"}; c=df[df.mcap_m.between(20,500)&(df.vol_m>=2)&(df.vr>=5)&~df.id.isin(stable)].copy()
     zen=df[df.id==ZEN_ID]
     if not zen.empty:c=pd.concat([c,zen]).drop_duplicates("id")
@@ -208,7 +238,6 @@ def main():
         if candidate is not None: ex=candidate; primary_exchange=name; break
     exchange_pool=[exchange(name) for name in ("okx","kraken","bybit")]; exchange_pool=[e for e in exchange_pool if e is not None]
 
-    # BTC is analysed independently of the low-cap universe and is always included.
     btc_vals,btc_rsi_sources=mtf_rsi(exchange_pool,"BTC"); btc_wrsi=weighted(btc_vals); btc_valid=[k for k,v in btc_vals.items() if pd.notna(v)]
     btc_mm={}
     for name in ("okx","kraken","bybit"):
@@ -217,7 +246,7 @@ def main():
             if s:
                 btc_mm=metrics(ohlcv(e,s,"1d",1000),ohlcv(e,s,"1w",100)); break
         except Exception: continue
-    btc_signal=btc_direction(btc24,btc7,btc_wrsi,btc_mm)
+    btc_signal=btc_direction(btc24,btc7,btc_wrsi,btc_mm,dom)
     btc_rsi_source="/".join(dict.fromkeys(btc_rsi_sources[k] for k in WEIGHTS if btc_rsi_sources[k]!="N/A")) or "N/A"
 
     rows=[]; rejected_zero_rsi=[]
@@ -246,28 +275,22 @@ def main():
     regime="RISK-ON" if btc24>2 and btc7>3 and breadth>=55 else ("RISK-OFF" if btc24<-3 and btc7<-5 and breadth<35 else "MIXED / TRANSITION")
     now=datetime.now(timezone.utc).isoformat(); clean=out.replace({np.nan:None})
     quality_counts={"pre_screen":len(pre),"ranked":len(out),"zero_rsi_rejected":len(rejected_zero_rsi),"rsi_6of6":int((out.rsi_valid_timeframes==6).sum()) if not out.empty else 0,"rsi_5plus":int((out.rsi_valid_timeframes>=5).sum()) if not out.empty else 0,"rsi_3plus":int((out.rsi_valid_timeframes>=3).sum()) if not out.empty else 0,"data_quality_warning":int((out.rsi_quality_pct<50).sum()) if not out.empty else 0}
-    btc_payload={"signal":btc_signal,"price_change_24h":btc24,"price_change_7d":btc7,"weighted_rsi":btc_wrsi,"rsi_valid_timeframes":len(btc_valid),"rsi_quality_pct":len(btc_valid)/6*100,"rsi_source":btc_rsi_source,"adx":btc_mm.get("adx"),"plus_di":btc_mm.get("pdi"),"minus_di":btc_mm.get("mdi"),"stoch_k":btc_mm.get("stoch_k"),"stoch_d":btc_mm.get("stoch_d"),"ema_bullish":btc_mm.get("ema_bullish"),"daily_breakout":btc_mm.get("daily_breakout"),"weekly_breakout":btc_mm.get("weekly_breakout"),"technical_score":technical_score(btc_mm,btc_wrsi,0,np.nan,len(btc_valid)/6*100)}
-    payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"candidate_count":len(c),"pre_screen_count":len(pre),"ranked_count":len(out),"exchange":primary_exchange,"data_quality":quality_counts},"btc_market":btc_payload,"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
+    btc_payload={"signal":btc_signal,"price_change_24h":btc24,"price_change_7d":btc7,"weighted_rsi":btc_wrsi,"rsi_valid_timeframes":len(btc_valid),"rsi_quality_pct":len(btc_valid)/6*100,"rsi_source":btc_rsi_source,"adx":btc_mm.get("adx"),"plus_di":btc_mm.get("pdi"),"minus_di":btc_mm.get("mdi"),"stoch_k":btc_mm.get("stoch_k"),"stoch_d":btc_mm.get("stoch_d"),"ema_bullish":btc_mm.get("ema_bullish"),"daily_breakout":btc_mm.get("daily_breakout"),"weekly_breakout":btc_mm.get("weekly_breakout"),"technical_score":technical_score(btc_mm,btc_wrsi,0,np.nan,len(btc_valid)/6*100),"dominance_pct":dom["current"],"dominance_change_1d":dom["change_1d"],"dominance_change_7d":dom["change_7d"],"dominance_trend":dom["trend"]}
+    payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"btc_dominance_pct":dom["current"],"btc_dominance_change_1d":dom["change_1d"],"btc_dominance_change_7d":dom["change_7d"],"btc_dominance_trend":dom["trend"],"candidate_count":len(c),"pre_screen_count":len(pre),"ranked_count":len(out),"exchange":primary_exchange,"data_quality":quality_counts},"btc_market":btc_payload,"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
     os.makedirs("data",exist_ok=True); open("data/latest_scan.json","w",encoding="utf-8").write(json.dumps(payload,indent=2,default=str))
 
     statefile="data/telegram_alert_state.json"; state=json.load(open(statefile,encoding="utf-8")) if os.path.exists(statefile) else {"keys":[]}; keys=set(state.get("keys",[])); sent=0
-
-    # BTC market-direction alert. It is state-aware, so the same direction is not sent repeatedly.
-    btc_key=f"{now[:10]}|{VERSION}|BTC|{btc_signal}"
+    btc_key=f"{now[:10]}|{VERSION}|BTC|{btc_signal}|{dom['trend']}"
     if btc_key not in keys:
         missing_btc=[tf for tf in WEIGHTS if pd.isna(btc_vals.get(tf))]
-        btc_msg=(f"🌐 GENERAL CRYPTO MARKET DIRECTION\n\n{btc_signal}\n\n"
-                 f"BTC 24h: {btc24:.2f}%\nBTC 7d: {btc7:.2f}%\n"
-                 f"BTC Weighted RSI: {btc_wrsi:.2f}\n"
-                 f"BTC RSI coverage: {len(btc_valid)}/6 ({len(btc_valid)/6*100:.0f}%)\n"
-                 f"BTC RSI source: {btc_rsi_source}\n"
-                 f"BTC ADX: {btc_mm.get('adx') if btc_mm.get('adx') is not None else 'N/A'}\n"
-                 f"+DI / -DI: {btc_mm.get('pdi') if btc_mm.get('pdi') is not None else 'N/A'} / {btc_mm.get('mdi') if btc_mm.get('mdi') is not None else 'N/A'}\n"
-                 f"StochRSI K/D: {btc_mm.get('stoch_k') if btc_mm.get('stoch_k') is not None else 'N/A'} / {btc_mm.get('stoch_d') if btc_mm.get('stoch_d') is not None else 'N/A'}\n"
-                 f"EMA20>EMA50: {btc_mm.get('ema_bullish')}\n"
-                 f"Daily/Weekly breakout: {btc_mm.get('daily_breakout')} / {btc_mm.get('weekly_breakout')}\n"
-                 f"\nALTCOIN BREADTH: {breadth:.1f}%\nOVERALL REGIME: {regime}\n"
-                 f"Missing RSI: {', '.join(missing_btc) if missing_btc else 'None'}")
+        fmt=lambda x: "N/A" if pd.isna(x) else f"{x:.2f}"
+        btc_msg=(f"🌐 GENERAL CRYPTO MARKET DIRECTION\n\n{btc_signal}\n\nBTC 24h: {btc24:.2f}%\nBTC 7d: {btc7:.2f}%\n"
+                 f"BTC Weighted RSI: {fmt(btc_wrsi)}\nBTC RSI coverage: {len(btc_valid)}/6 ({len(btc_valid)/6*100:.0f}%)\n"
+                 f"BTC ADX: {fmt(btc_mm.get('adx',np.nan))}\n+DI / -DI: {fmt(btc_mm.get('pdi',np.nan))} / {fmt(btc_mm.get('mdi',np.nan))}\n"
+                 f"StochRSI K/D: {fmt(btc_mm.get('stoch_k',np.nan))} / {fmt(btc_mm.get('stoch_d',np.nan))}\nEMA20>EMA50: {btc_mm.get('ema_bullish')}\n"
+                 f"\n₿ BTC DOMINANCE: {fmt(dom['current'])}%\n{dom['trend']}\n"
+                 f"Dominance 1D: {fmt(dom['change_1d'])} percentage points\nDominance 7D: {fmt(dom['change_7d'])} percentage points\n"
+                 f"\nALTCOIN BREADTH: {breadth:.1f}%\nOVERALL REGIME: {regime}\nMissing RSI: {', '.join(missing_btc) if missing_btc else 'None'}")
         ok,err=telegram(btc_msg)
         if ok: keys.add(btc_key); sent+=1
         else: print("Telegram BTC:",err)
@@ -277,12 +300,13 @@ def main():
         if ("BREAKOUT" in sig or "RETEST" in sig) and (score>=70 or r["ticker"]=="ZEN") and key not in keys:
             missing=[tf for tf in WEIGHTS if pd.isna(r.get("rsi_"+tf.lower()))]
             msg=(f"{sig}\n\n{r['coin']} ({r['ticker']})\nTechnical score: {score:.1f}\nWeighted RSI: {r['weighted_rsi'] if r['weighted_rsi'] is not None else 'N/A'}\n"
-                 f"BTC market direction: {btc_signal}\nBTC 24h/7d: {btc24:.2f}% / {btc7:.2f}%\nBTC-relative 7D: {r['btc_rel_7d_pct']:.2f}%\nVol/MCap: {r['vol_mcap_pct']:.2f}%\nADX: {r['adx'] if r['adx'] is not None else 'N/A'}\n"
+                 f"BTC market direction: {btc_signal}\nBTC 24h/7d: {btc24:.2f}% / {btc7:.2f}%\nBTC dominance: {dom['current']:.2f}% ({dom['trend']})\n"
+                 f"BTC dominance 1D/7D: {dom['change_1d']:.2f}pp / {dom['change_7d']:.2f}pp\nBTC-relative 7D: {r['btc_rel_7d_pct']:.2f}%\nVol/MCap: {r['vol_mcap_pct']:.2f}%\nADX: {r['adx'] if r['adx'] is not None else 'N/A'}\n"
                  f"\nDATA_QUALITY\nRSI coverage: {r['rsi_valid_timeframes']}/6 ({r['rsi_quality_pct']:.0f}%)\nRSI source: {r['rsi_source']}\nMissing RSI: {', '.join(missing) if missing else 'None'}\n\nRegime: {regime}")
             ok,err=telegram(msg)
             if ok:keys.add(key); sent+=1
-            else:print("Telegram:",err)
+            else: print("Telegram:",err)
     state["keys"]=list(keys)[-1000:]; open(statefile,"w",encoding="utf-8").write(json.dumps(state,indent=2))
-    print(f"{VERSION} scan complete | candidates={len(c)} pre_screen={len(pre)} primary_exchange={primary_exchange} regime={regime} btc={btc_signal} telegram_sent={sent}")
+    print(f"{VERSION} scan complete | candidates={len(c)} pre_screen={len(pre)} primary_exchange={primary_exchange} regime={regime} btc={btc_signal} btc_dom={dom['current']}% {dom['trend']} telegram_sent={sent}")
 
 if __name__=="__main__": main()
