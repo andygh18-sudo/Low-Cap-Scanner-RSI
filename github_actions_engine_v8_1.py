@@ -34,11 +34,21 @@ def markets():
 
 def exchange(name):
     k=f"ex:{name}"
-    if k not in CACHE:
-        ex=getattr(ccxt,name)({"enableRateLimit":True,"timeout":30000}); ex.load_markets(); CACHE[k]=ex
-    return CACHE[k]
+    if k in CACHE:
+        return CACHE[k]
+    try:
+        ex=getattr(ccxt,name)({"enableRateLimit":True,"timeout":30000})
+        ex.load_markets()
+        CACHE[k]=ex
+        return ex
+    except Exception as e:
+        print(f"Exchange unavailable: {name}: {type(e).__name__}: {e}")
+        CACHE[k]=None
+        return None
 
 def symbol(ex,ticker):
+    if ex is None:
+        return None
     t=str(ticker).upper()
     for s in (f"{t}/USDT",f"{t}/USDT:USDT",f"{t}/USDC",f"{t}/USD"):
         m=ex.markets.get(s)
@@ -48,6 +58,8 @@ def symbol(ex,ticker):
     return None
 
 def ohlcv(ex,sym,tf,limit):
+    if ex is None or not sym:
+        raise ValueError("exchange or symbol unavailable")
     k=("ohlcv",ex.id,sym,tf,limit)
     if k in CACHE:return CACHE[k].copy()
     d=pd.DataFrame(ex.fetch_ohlcv(sym,tf,limit=limit),columns=["ts","open","high","low","close","volume"])
@@ -156,10 +168,20 @@ def main():
     c["pre"]=np.clip(c.vr/25*20,0,20)+np.clip((c.price_change_percentage_24h+10)*.8,0,20)+np.clip((c.btc_rel_7d+10)*.4,0,20)+np.clip(c.vr/10,0,20)
     pre=c.sort_values("pre",ascending=False).head(60).copy()
     if not zen.empty:pre=pd.concat([pre,zen]).drop_duplicates("id")
-    ex=exchange("bybit"); rows=[]
+    # Bybit can return HTTP 403 from GitHub-hosted runner regions.
+    # Use the first reachable exchange instead of making the whole scan fail.
+    ex=None
+    primary_exchange="N/A"
+    for name in ("okx","kraken","bybit"):
+        candidate=exchange(name)
+        if candidate is not None:
+            ex=candidate
+            primary_exchange=name
+            break
+    rows=[]
     for _,x in pre.iterrows():
-        t=str(x.symbol).upper(); vals=mtf_rsi(ex,t) if symbol(ex,t) else {k:np.nan for k in WEIGHTS}; wr=weighted(vals); mm={}; source="BYBIT"
-        for name in ("bybit","okx","kraken"):
+        t=str(x.symbol).upper(); vals=mtf_rsi(ex,t) if symbol(ex,t) else {k:np.nan for k in WEIGHTS}; wr=weighted(vals); mm={}; source=primary_exchange.upper() if primary_exchange!="N/A" else "N/A"
+        for name in ("okx","kraken","bybit"):
             try:
                 e=exchange(name); s=symbol(e,t)
                 if s: mm=metrics(ohlcv(e,s,"1d",100),ohlcv(e,s,"1w",80)); source=name.upper(); break
@@ -177,7 +199,7 @@ def main():
     out=pd.DataFrame(rows).sort_values(["true_breakout","technical_score"],ascending=[False,False])
     breadth=float((c.price_change_percentage_24h>0).mean()*100); regime="RISK-ON" if btc24>2 and btc7>3 and breadth>=55 else ("RISK-OFF" if btc24<-3 and btc7<-5 and breadth<35 else "MIXED / TRANSITION")
     now=datetime.now(timezone.utc).isoformat(); clean=out.replace({np.nan:None})
-    payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"candidate_count":len(c),"pre_screen_count":len(pre),"exchange":"bybit"},"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
+    payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"candidate_count":len(c),"pre_screen_count":len(pre),"exchange":primary_exchange},"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
     os.makedirs("data",exist_ok=True); open("data/latest_scan.json","w",encoding="utf-8").write(json.dumps(payload,indent=2,default=str))
     statefile="data/telegram_alert_state.json"; state=json.load(open(statefile,encoding="utf-8")) if os.path.exists(statefile) else {"keys":[]}; keys=set(state.get("keys",[])); sent=0
     for r in out.to_dict("records"):
@@ -188,6 +210,6 @@ def main():
             if ok:keys.add(key); sent+=1
             else:print("Telegram:",err)
     state["keys"]=list(keys)[-1000:]; open(statefile,"w",encoding="utf-8").write(json.dumps(state,indent=2))
-    print(f"{VERSION} scan complete | candidates={len(c)} pre_screen={len(pre)} regime={regime} telegram_sent={sent}")
+    print(f"{VERSION} scan complete | candidates={len(c)} pre_screen={len(pre)} primary_exchange={primary_exchange} regime={regime} telegram_sent={sent}")
 
 if __name__=="__main__": main()
