@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import ccxt
 
-VERSION = "v8.2.4"
+VERSION = "v8.2.5"
 CG = "https://api.coingecko.com/api/v3"
 ZEN_ID = "horizen"
 WEIGHTS = {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}
@@ -62,6 +62,20 @@ def btc_dominance():
     elif pd.notna(d7) and d7<=-0.50: trend="📉 BTC DOMINANCE FALLING"
     else: trend="➡️ BTC DOMINANCE FLAT"
     return {"current":current,"change_1d":d1,"change_7d":d7,"trend":trend}
+
+def fear_greed():
+    """Fetch the latest Crypto Fear & Greed Index from Alternative.me."""
+    try:
+        r=requests.get("https://api.alternative.me/fng/",params={"limit":2,"format":"json"},timeout=20)
+        r.raise_for_status(); j=r.json(); rows=j.get("data",[]) or []
+        if not rows: raise ValueError("No Fear & Greed data returned")
+        cur=rows[0]; value=float(cur.get("value",np.nan)); classification=str(cur.get("value_classification","N/A"))
+        prev=float(rows[1].get("value",np.nan)) if len(rows)>1 else np.nan
+        change=value-prev if pd.notna(value) and pd.notna(prev) else np.nan
+        return {"value":value,"classification":classification,"change_1d":change,"timestamp":cur.get("timestamp")}
+    except Exception as e:
+        print(f"Fear & Greed failed: {type(e).__name__}: {e}")
+        return {"value":np.nan,"classification":"N/A","change_1d":np.nan,"timestamp":None}
 
 def total3_btc():
     """Estimate TOTAL3/BTC from CoinGecko global market-cap history.
@@ -265,6 +279,7 @@ def main():
     btc=df[df.id=="bitcoin"].iloc[0]; btc7=float(btc.price_change_percentage_7d or btc.price_change_percentage_7d_in_currency or 0); btc24=float(btc.price_change_percentage_24h or 0)
     dom=btc_dominance()
     t3=total3_btc()
+    fg=fear_greed()
     stable={"tether","usd-coin","dai","usds","true-usd","usdd"}; c=df[df.mcap_m.between(20,500)&(df.vol_m>=2)&(df.vr>=5)&~df.id.isin(stable)].copy()
     zen=df[df.id==ZEN_ID]
     if not zen.empty:c=pd.concat([c,zen]).drop_duplicates("id")
@@ -316,7 +331,7 @@ def main():
     regime="RISK-ON" if btc24>2 and btc7>3 and breadth>=55 else ("RISK-OFF" if btc24<-3 and btc7<-5 and breadth<35 else "MIXED / TRANSITION")
     now=datetime.now(timezone.utc).isoformat(); clean=out.replace({np.nan:None})
     quality_counts={"pre_screen":len(pre),"ranked":len(out),"zero_rsi_rejected":len(rejected_zero_rsi),"rsi_6of6":int((out.rsi_valid_timeframes==6).sum()) if not out.empty else 0,"rsi_5plus":int((out.rsi_valid_timeframes>=5).sum()) if not out.empty else 0,"rsi_3plus":int((out.rsi_valid_timeframes>=3).sum()) if not out.empty else 0,"data_quality_warning":int((out.rsi_quality_pct<50).sum()) if not out.empty else 0}
-    btc_payload={"signal":btc_signal,"price_change_24h":btc24,"price_change_7d":btc7,"weighted_rsi":btc_wrsi,"rsi_valid_timeframes":len(btc_valid),"rsi_quality_pct":len(btc_valid)/6*100,"rsi_source":btc_rsi_source,"adx":btc_mm.get("adx"),"plus_di":btc_mm.get("pdi"),"minus_di":btc_mm.get("mdi"),"stoch_k":btc_mm.get("stoch_k"),"stoch_d":btc_mm.get("stoch_d"),"ema_bullish":btc_mm.get("ema_bullish"),"daily_breakout":btc_mm.get("daily_breakout"),"weekly_breakout":btc_mm.get("weekly_breakout"),"technical_score":technical_score(btc_mm,btc_wrsi,0,np.nan,len(btc_valid)/6*100),"dominance_pct":dom["current"],"dominance_change_1d":dom["change_1d"],"dominance_change_7d":dom["change_7d"],"dominance_trend":dom["trend"],"total3_btc_ratio":t3["ratio"],"total3_btc_change_1d_pct":t3["change_1d_pct"],"total3_btc_change_7d_pct":t3["change_7d_pct"],"total3_btc_trend":t3["trend"]}
+    btc_payload={"signal":btc_signal,"price_change_24h":btc24,"price_change_7d":btc7,"weighted_rsi":btc_wrsi,"rsi_valid_timeframes":len(btc_valid),"rsi_quality_pct":len(btc_valid)/6*100,"rsi_source":btc_rsi_source,"adx":btc_mm.get("adx"),"plus_di":btc_mm.get("pdi"),"minus_di":btc_mm.get("mdi"),"stoch_k":btc_mm.get("stoch_k"),"stoch_d":btc_mm.get("stoch_d"),"ema_bullish":btc_mm.get("ema_bullish"),"daily_breakout":btc_mm.get("daily_breakout"),"weekly_breakout":btc_mm.get("weekly_breakout"),"technical_score":technical_score(btc_mm,btc_wrsi,0,np.nan,len(btc_valid)/6*100),"dominance_pct":dom["current"],"dominance_change_1d":dom["change_1d"],"dominance_change_7d":dom["change_7d"],"dominance_trend":dom["trend"],"total3_btc_ratio":t3["ratio"],"total3_btc_change_1d_pct":t3["change_1d_pct"],"total3_btc_change_7d_pct":t3["change_7d_pct"],"total3_btc_trend":t3["trend"],"fear_greed_value":fg["value"],"fear_greed_classification":fg["classification"],"fear_greed_change_1d":fg["change_1d"]}
     payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"btc_dominance_pct":dom["current"],"btc_dominance_change_1d":dom["change_1d"],"btc_dominance_change_7d":dom["change_7d"],"btc_dominance_trend":dom["trend"],"candidate_count":len(c),"pre_screen_count":len(pre),"ranked_count":len(out),"exchange":primary_exchange,"data_quality":quality_counts},"btc_market":btc_payload,"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
     os.makedirs("data",exist_ok=True); open("data/latest_scan.json","w",encoding="utf-8").write(json.dumps(payload,indent=2,default=str))
 
@@ -349,6 +364,6 @@ def main():
             if ok:keys.add(key); sent+=1
             else: print("Telegram:",err)
     state["keys"]=list(keys)[-1000:]; open(statefile,"w",encoding="utf-8").write(json.dumps(state,indent=2))
-    print(f"{VERSION} scan complete | candidates={len(c)} pre_screen={len(pre)} primary_exchange={primary_exchange} regime={regime} btc={btc_signal} btc_dom={dom['current']}% {dom['trend']} total3btc={t3['ratio']} {t3['trend']} telegram_sent={sent}")
+    print(f"{VERSION} scan complete | candidates={len(c)} pre_screen={len(pre)} primary_exchange={primary_exchange} regime={regime} btc={btc_signal} btc_dom={dom['current']}% {dom['trend']} total3btc={t3['ratio']} {t3['trend']} fng={fg['value']} {fg['classification']} telegram_sent={sent}")
 
 if __name__=="__main__": main()
