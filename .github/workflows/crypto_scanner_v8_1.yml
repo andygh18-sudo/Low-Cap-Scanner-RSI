@@ -1,4 +1,4 @@
-name: Crypto Low-Cap Scanner v8.1
+name: Crypto Low-Cap Scanner v8.2
 
 on:
   workflow_dispatch:
@@ -32,19 +32,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run v8.1 background engine
+      - name: Run v8.2 background engine
         env:
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python github_actions_engine_v8_1.py
 
-      - name: Verify v8.1 output
+      - name: Verify v8.2 output
         run: |
           python - <<'PY'
           import json
           p=json.load(open("data/latest_scan.json",encoding="utf-8"))
-          assert p["meta"]["engine_version"]=="v8.1"
+          assert p["meta"]["engine_version"]=="v8.2"
           assert p["meta"]["pre_screen_count"]>=50
           assert p["top10"]
           print("ENGINE:",p["meta"]["engine_version"])
@@ -58,5 +58,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/latest_scan.json data/telegram_alert_state.json
-          git diff --cached --quiet || git commit -m "Update v8.1 crypto scan results"
+          git diff --cached --quiet || git commit -m "Update v8.2 crypto scan results"
           git push
