@@ -1531,11 +1531,28 @@ else:
 
 
 st.title("🔬 Live Deep Technical Analysis")
-st.caption("v8.3 two-stage engine: 50–100 fast candidates → 10–25 deep technical candidates")
+st.caption("v8.4 two-stage engine: 50–100 fast candidates → 10–25 deep technical candidates")
 
-if "run" not in st.session_state: st.session_state.run=False
-if run: st.session_state.run=True
-if run or st.session_state.run:
+# Main-page control: the live engine is intentionally opt-in because it fetches
+# exchange candles, MTF RSI, derivatives and downside-resilience data. The
+# session flag persists the user's choice across Streamlit reruns.
+_live_main_run=st.button(
+    "🚀 Run Live Deep Technical Analysis",
+    type="primary",
+    key="v8_run_main",
+    help="Run the live two-stage scanner using the selected exchange and sidebar filters."
+)
+if "run" not in st.session_state:
+    st.session_state.run=False
+if run or _live_main_run:
+    st.session_state.run=True
+
+if not st.session_state.run:
+    st.info(
+        "Live Deep Technical Analysis is ready. Click **Run Live Deep Technical Analysis** "
+        "above (or **Run full scanner** in the sidebar) to build the live Stage 1 + Stage 2 results."
+    )
+else:
     try:
         with st.spinner("Loading market universe with CoinGecko 429 protection…"):
             df=cg_markets()
@@ -1543,9 +1560,6 @@ if run or st.session_state.run:
             st.error("No market-universe data returned.")
             st.stop()
 
-        if not run and not st.session_state.run:
-            st.info("Live technical bundles are paused. The latest background scan above is shown without rebuilding exchange indicators. Click **Run full scanner** when you want fresh technical data.")
-            st.stop()
         warning=getattr(df,"attrs",{}).get("coingecko_warning")
         if warning: st.warning(str(warning)+" — continuing with available universe.")
         df["mcap_m"]=pd.to_numeric(df.market_cap,errors="coerce")/1e6
