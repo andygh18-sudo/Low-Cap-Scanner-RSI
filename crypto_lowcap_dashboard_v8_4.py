@@ -112,7 +112,7 @@ else:
 
 st.subheader("🎯 Coin Deep Dive")
 if not df.empty:
-    choices=sorted(df["Ticker"].dropna().astype(str).unique()); default=choices.index("ZEN") if "ZEN" in choices else 0
+    choices=sorted(df["Ticker"].dropna().astype(str).unique()); default=0
     t=st.selectbox("Select a coin",choices,index=default)
     x=df[df["Ticker"].astype(str).str.upper().eq(t.upper())].head(1)
     if not x.empty:
