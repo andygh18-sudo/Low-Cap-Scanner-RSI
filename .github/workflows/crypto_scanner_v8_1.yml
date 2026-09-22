@@ -47,6 +47,9 @@ jobs:
           assert p["btc_market"]["signal"]
           assert "btc_dominance_pct" in p["meta"]
           assert "btc_dominance_trend" in p["meta"]
+          assert "total3_btc_ratio" in p["meta"]
+          assert "total3_btc_trend" in p["meta"]
+          assert p["btc_market"].get("total3_btc_trend")
           print("ENGINE:",p["meta"]["engine_version"])
           print("PRE-SCREEN:",p["meta"]["pre_screen_count"])
           print("BTC:",p["btc_market"]["signal"])
