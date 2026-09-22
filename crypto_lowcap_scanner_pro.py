@@ -636,10 +636,16 @@ def _coingecko_mtf_rsi_fallback(coin_id):
     return {k: float(v) for k, v in out.items() if pd.notna(v) and np.isfinite(float(v))}
 
 
-def _mtf_rsi_cached(ticker, ex=None, symbol=None):
-    """Return normalized MTF RSI, using rsi_engine first and exchange-candle fallback."""
+def _mtf_rsi_cached(ticker, ex=None, symbol=None, coin_id=None):
+    """Return normalized MTF RSI with exchange-independent CoinGecko fallback.
+
+    CoinGecko requires the CoinGecko coin ID (e.g. ``horizen``), not the ticker
+    (e.g. ``ZEN``).  The coin ID is therefore carried explicitly so the fallback
+    cannot silently query an invalid endpoint.
+    """
     key = str(ticker).upper()
-    cache_key = ("rsi", key, getattr(ex, "id", None), symbol)
+    cg_id = str(coin_id).strip() if coin_id else key
+    cache_key = ("rsi", key, cg_id, getattr(ex, "id", None), symbol)
     if cache_key in _ANALYSIS_CACHE:
         return dict(_ANALYSIS_CACHE[cache_key])
 
@@ -662,7 +668,7 @@ def _mtf_rsi_cached(ticker, ex=None, symbol=None):
     # Weighted RSI is still available from valid longer timeframes.
     missing = {"1D", "1W", "1M", "3M"} - set(vals)
     if missing:
-        fallback = _coingecko_mtf_rsi_fallback(key)
+        fallback = _coingecko_mtf_rsi_fallback(cg_id)
         for tf, value in fallback.items():
             vals.setdefault(tf, value)
 
@@ -801,8 +807,20 @@ def analysis_bundle(exchange_name, coin_row):
          "stoch_k":np.nan,"stoch_d":np.nan,"stoch_source":"Unavailable","adx":np.nan,"pdi":np.nan,"mdi":np.nan,"adx_prev":np.nan,"adx_source":"Unavailable",
          "down_beta":np.nan,"down_rel":np.nan,"down_hit":np.nan,"supply":supply_quality(coin_row),"base":{},"deriv":{}}
     try:
-        ex=get_exchange(exchange_name)
-        sym=find_market_symbol(ex,ticker)
+        # RSI is deliberately calculated BEFORE requiring an exchange symbol.
+        # Many low-cap assets are not listed on the selected candle exchange,
+        # but CoinGecko still has price history for them.
+        try:
+            ex=get_exchange(exchange_name)
+        except Exception:
+            ex=None
+        sym=find_market_symbol(ex,ticker) if ex is not None else None
+
+        vals=_mtf_rsi_cached(ticker, ex, sym, cid)
+        out["rsi"]=vals
+        out["weighted_rsi"]=weighted_rsi_from_values(vals)
+
+        # Exchange-dependent technical calculations require a valid symbol.
         if not sym:
             _ANALYSIS_CACHE[key]=out; return out
         d=_completed_ohlcv(ex,sym,"1d",260); w=_completed_ohlcv(ex,sym,"1w",30)
@@ -815,8 +833,9 @@ def analysis_bundle(exchange_name, coin_row):
             out["base"]=base_quality_metrics(d)
             # BTC-down-day resilience uses timestamp-aligned daily returns.
             out["down_beta"],out["down_rel"],out["down_hit"]=downside_resilience_cached(ex,sym)
-        vals=_mtf_rsi_cached(ticker, ex, sym); out["rsi"]=vals; out["weighted_rsi"]=weighted_rsi_from_values(vals)
-        # Prefer exchange daily calculations; CoinGecko is fallback.
+        # RSI was already calculated above from the shared RSI path.
+        # Prefer exchange daily calculations for the remaining indicators;
+        # CoinGecko remains the RSI fallback.
         if len(d)>=50:
             sk,sd=stoch_rsi(d.close)
             out["stoch_k"],out["stoch_d"],out["stoch_source"]=sk,sd,ex.id.upper()
