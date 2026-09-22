@@ -1394,7 +1394,8 @@ if _rsi14_selected:
     else:
         st.info(f"No {_rsi14_exchange.upper()} spot candles available for {_rsi14_selected}.")
 
-\n    _qc=_meta.get("quality_counts",{}) or {}
+
+    _qc=_meta.get("quality_counts",{}) or {}
     st.caption(f"Scan quality: candidates={_meta.get('candidate_count','N/A')} | pre-screen={_meta.get('pre_screen_count','N/A')} | ranked={_meta.get('ranked_count','N/A')} | RSI 6/6={_qc.get('rsi_full','N/A')} | RSI 0/6={_qc.get('rsi_zero','N/A')}")
 
 
