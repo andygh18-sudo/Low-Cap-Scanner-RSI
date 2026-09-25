@@ -147,5 +147,11 @@
     "btc_dominance_pct": 58.219138377191314,
     "usdt_dominance_pct": 6.352779111713006,
     "total3_btc_ratio": 0.5225142649619386
+  },
+  {
+    "ts": "2026-09-25T19:15:18.440082+00:00",
+    "btc_dominance_pct": 58.23480117034544,
+    "usdt_dominance_pct": 6.3440763928316395,
+    "total3_btc_ratio": 0.5223304467274549
   }
 ]
