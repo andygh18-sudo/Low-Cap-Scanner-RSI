@@ -2,9 +2,6 @@ name: Crypto Low-Cap Scanner v8.2.5
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "17 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23 * * *"
-      timezone: "Europe/London"
 
 permissions:
   contents: write
@@ -67,3 +64,10 @@ jobs:
           git add data/latest_scan.json data/telegram_alert_state.json data/market_context_history.json
           git diff --cached --quiet || git commit -m "Update v8.2.5 crypto scan results and market context history"
           git push
+
+      - name: Start next scan after successful run
+        if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run crypto_scanner_v8_1.yml --ref main
