@@ -7,10 +7,6 @@ permissions:
   contents: write
   actions: write
 
-concurrency:
-  group: crypto-lowcap-scanner
-  cancel-in-progress: true
-
 jobs:
   scan:
     runs-on: ubuntu-latest
