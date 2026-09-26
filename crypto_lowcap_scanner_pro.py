@@ -8,7 +8,7 @@ st.set_page_config(page_title="Crypto Low-Cap TRUE BREAKOUT PRO v8", page_icon="
 if "auto_refresh" not in st.session_state:
     st.session_state.auto_refresh = True
 if "refresh_minutes" not in st.session_state:
-    st.session_state.refresh_minutes = 15
+    st.session_state.refresh_minutes = 5
 
 with st.sidebar:
     st.subheader("🔄 Dashboard Refresh")
