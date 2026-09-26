@@ -3,8 +3,10 @@ import streamlit as st
 st.set_page_config(page_title="Crypto Low-Cap TRUE BREAKOUT PRO v8", page_icon="₿", layout="wide")
 
 # Dashboard refresh controls
+# Auto-refresh is enabled by default so the dashboard follows the latest
+# GitHub scanner result without requiring a manual browser refresh.
 if "auto_refresh" not in st.session_state:
-    st.session_state.auto_refresh = False
+    st.session_state.auto_refresh = True
 if "refresh_minutes" not in st.session_state:
     st.session_state.refresh_minutes = 15
 
@@ -28,7 +30,12 @@ run_every = f"{st.session_state.refresh_minutes}m" if st.session_state.auto_refr
 @st.fragment(run_every=run_every, key="dashboard_refresh")
 def _refresh_status():
     from datetime import datetime
-    st.caption(f"Last dashboard refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    if st.session_state.auto_refresh:
+        # A fragment tick must trigger a full app rerun; otherwise only this
+        # status area refreshes and the scanner data remains stale.
+        st.rerun()
+    else:
+        st.caption(f"Last dashboard refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 _refresh_status()
 import pandas as pd
