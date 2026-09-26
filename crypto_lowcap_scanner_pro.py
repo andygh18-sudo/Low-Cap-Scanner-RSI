@@ -29,13 +29,25 @@ run_every = f"{st.session_state.refresh_minutes}m" if st.session_state.auto_refr
 
 @st.fragment(run_every=run_every, key="dashboard_refresh")
 def _refresh_status():
-    from datetime import datetime
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
     if st.session_state.auto_refresh:
-        # A fragment tick must trigger a full app rerun; otherwise only this
-        # status area refreshes and the scanner data remains stale.
-        st.rerun()
+        # Do not rerun on the fragment's first execution.  Store the time of
+        # the last full-app refresh, then only trigger a full rerun when a
+        # scheduled fragment tick reaches the selected interval.
+        last_full_refresh = st.session_state.get("last_full_refresh")
+        if last_full_refresh is None:
+            st.session_state.last_full_refresh = now
+        else:
+            elapsed = (now - last_full_refresh).total_seconds()
+            interval_seconds = st.session_state.refresh_minutes * 60
+            if elapsed >= interval_seconds:
+                st.session_state.last_full_refresh = now
+                st.rerun()
+        st.caption(f"Auto refresh: every {st.session_state.refresh_minutes} minutes")
     else:
-        st.caption(f"Last dashboard refresh: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        st.caption("Auto refresh: OFF")
 
 _refresh_status()
 import pandas as pd
