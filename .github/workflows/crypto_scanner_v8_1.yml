@@ -69,7 +69,21 @@ jobs:
             echo "No result changes to commit."
           else
             git commit -m "Update v8.2.5 crypto scan results and market context history"
-            git push origin HEAD:main
+            
+            # Another chained scan may have advanced main while this scan was running.
+            # Rebase the result commit onto the latest remote main, then retry the push.
+            for attempt in 1 2 3; do
+              if git fetch origin main && git rebase origin/main && git push origin HEAD:main; then
+                echo "Result push succeeded on attempt $attempt."
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "Result push failed after 3 attempts."
+                exit 1
+              fi
+              echo "Remote main moved; retrying after refresh..."
+              sleep 5
+            done
           fi
 
       - name: Start next scan after successful run
