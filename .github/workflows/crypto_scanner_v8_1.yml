@@ -65,8 +65,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add data/latest_scan.json data/telegram_alert_state.json data/market_context_history.json
-          git diff --cached --quiet || git commit -m "Update v8.2.5 crypto scan results and market context history"
-          git push
+          if git diff --cached --quiet; then
+            echo "No result changes to commit."
+          else
+            git commit -m "Update v8.2.5 crypto scan results and market context history"
+            git push origin HEAD:main
+          fi
 
       - name: Start next scan after successful run
         if: ${{ success() }}
