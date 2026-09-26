@@ -7,6 +7,12 @@ permissions:
   contents: write
   actions: write
 
+# Keep the scan chain strictly sequential.
+# The current run finishes first; the self-dispatched next run waits in the queue.
+concurrency:
+  group: crypto-lowcap-scanner
+  cancel-in-progress: false
+
 jobs:
   scan:
     runs-on: ubuntu-latest
