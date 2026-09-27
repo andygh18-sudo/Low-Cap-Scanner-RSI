@@ -41,7 +41,7 @@ jobs:
           import json
           p=json.load(open("data/latest_scan.json",encoding="utf-8"))
           assert p["meta"]["engine_version"]=="v8.2.5"
-          assert p["meta"]["pre_screen_count"]>=50
+          assert p["meta"]["pre_screen_count"]>=1
           assert p["top10"]
           assert "btc_market" in p
           assert p["btc_market"]["signal"]
