@@ -8,6 +8,10 @@ from rsi_engine import multi_timeframe_rsi, weighted_rsi
 
 CG='https://api.coingecko.com/api/v3'
 STABLES={'tether','usd-coin','dai','usds','true-usd','usdd'}
+LOW_CAP_MIN_MCAP_M=20.0
+LOW_CAP_MAX_MCAP_M=500.0
+LOW_SUPPLY_MAX=25_000_000.0
+LOW_SUPPLY_MIN_CIRC_RATIO=0.70
 
 session=requests.Session()
 session.headers.update({'User-Agent':'crypto-lowcap-scanner/2.0'})
@@ -121,7 +125,7 @@ def scan():
     df['vr']=np.where(df.market_cap>0,df.total_volume/df.market_cap*100,0)
     btc=df[df.id.eq('bitcoin')].iloc[0]
     btc24=float(btc.price_change_percentage_24h); btc7=float(btc.price_change_percentage_7d_in_currency)
-    c=df[df.mcap_m.between(20,500)&(df.vol_m>=2)&(df.vr>=5)&~df.id.isin(STABLES)].copy()
+    df['circulating_max_ratio']=np.where(df['max_supply'].notna()&(df['max_supply']>0),df['circulating_supply']/df['max_supply'],np.nan); df['low_supply_pass']=df['max_supply'].notna()&(df['max_supply']>0)&(df['max_supply']<=LOW_SUPPLY_MAX)&(df['circulating_max_ratio']>=LOW_SUPPLY_MIN_CIRC_RATIO); c=df[df.mcap_m.between(LOW_CAP_MIN_MCAP_M,LOW_CAP_MAX_MCAP_M)&(df.vol_m>=2)&(df.vr>=5)&df['low_supply_pass']&~df.id.isin(STABLES)].copy()
     c['btc_rel_7d']=c.price_change_percentage_7d_in_currency-btc7
     breadth=float((c.price_change_percentage_24h>0).mean()*100) if len(c) else 0
     if btc24>2 and btc7>3 and breadth>=55: regime='RISK-ON'; regime_penalty=0
@@ -157,7 +161,7 @@ def scan():
             elif float(x.btc_rel_7d)>10 and float(x.vr)>=20 and wrsi<70: status='💪 RELATIVE-STRENGTH LEADER'
             rows.append({
                 'coin':x['name'],'ticker':str(x['symbol']).upper(),'id':x.id,
-                'market_cap_m':float(x.mcap_m),'volume_m':float(x.vol_m),'vol_mcap_pct':float(x.vr),
+                'market_cap_m':float(x.mcap_m),'volume_m':float(x.vol_m),'vol_mcap_pct':float(x.vr),'max_supply':float(x.max_supply) if pd.notna(x.max_supply) else None,'circulating_supply':float(x.circulating_supply) if pd.notna(x.circulating_supply) else None,'circulating_max_ratio':float(x.circulating_max_ratio) if pd.notna(x.circulating_max_ratio) else None,
                 'change_24h_pct':float(x.price_change_percentage_24h),'change_7d_pct':float(x.price_change_percentage_7d_in_currency),
                 'btc_rel_7d_pct':float(x.btc_rel_7d),'rsi_1h':mr['1H'],'rsi_4h':mr['4H'],'rsi_1d':mr['1D'],'rsi_1w':mr['1W'],'rsi_1m':mr['1M'],'rsi_3m':mr['3M'],
                 'weighted_rsi':wrsi,'downside_beta':rr['down_beta'],'btc_down_day_rel_pct':rr['down_rel'],
