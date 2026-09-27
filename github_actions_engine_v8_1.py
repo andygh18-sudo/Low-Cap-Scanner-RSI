@@ -7,6 +7,11 @@ import ccxt
 
 VERSION = "v8.2.5"
 CG = "https://api.coingecko.com/api/v3"
+# Low-Cap Scanner universe filter: capped supply + low market cap.
+LOW_CAP_MIN_MCAP_M = 20.0
+LOW_CAP_MAX_MCAP_M = 500.0
+LOW_SUPPLY_MAX = 25_000_000.0
+LOW_SUPPLY_MIN_CIRC_RATIO = 0.70
 WEIGHTS = {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}
 CACHE = {}
 
@@ -342,7 +347,7 @@ def main():
     dom={"current":ctx["dominance_pct"],"change_1d":ctx["dominance_change_1d"],"change_7d":ctx["dominance_change_7d"],"trend":ctx["dominance_trend"]}
     t3={"ratio":ctx["total3_btc_ratio"],"change_1d_pct":ctx["total3_btc_change_1d_pct"],"change_7d_pct":ctx["total3_btc_change_7d_pct"],"trend":ctx["total3_btc_trend"]}
     fg=fear_greed()
-    stable={"tether","usd-coin","dai","usds","true-usd","usdd"}; c=df[df.mcap_m.between(20,500)&(df.vol_m>=2)&(df.vr>=5)&~df.id.isin(stable)].copy()
+    stable={"tether","usd-coin","dai","usds","true-usd","usdd"}; df["circulating_max_ratio"]=np.where(df["max_supply"].notna() & (df["max_supply"]>0),df["circulating_supply"]/df["max_supply"],np.nan); df["low_supply_pass"]=df["max_supply"].notna() & (df["max_supply"]>0) & (df["max_supply"]<=LOW_SUPPLY_MAX) & (df["circulating_max_ratio"]>=LOW_SUPPLY_MIN_CIRC_RATIO); c=df[df.mcap_m.between(LOW_CAP_MIN_MCAP_M,LOW_CAP_MAX_MCAP_M)&(df.vol_m>=2)&(df.vr>=5)&df["low_supply_pass"]&~df.id.isin(stable)].copy()
     c["btc_rel_7d"]=c.price_change_percentage_7d_in_currency-btc7
     c["pre"]=np.clip(c.vr/25*20,0,20)+np.clip((c.price_change_percentage_24h+10)*.8,0,20)+np.clip((c.btc_rel_7d+10)*.4,0,20)+np.clip(c.vr/10,0,20)
     pre=c.sort_values("pre",ascending=False).head(60).copy()
@@ -383,7 +388,7 @@ def main():
         elif mm.get("daily_breakout"):sig="🟡 BREAKOUT ATTEMPT"
         elif tech>=70:sig="🟢 STRONG SETUP"
         else:sig="⚪ BASE / PRE-BREAKOUT"
-        rows.append({"coin":x["name"],"ticker":t,"id":x["id"],"market_cap_m":float(x.mcap_m),"volume_m":float(x.vol_m),"vol_mcap_pct":float(x.vr),"change_24h_pct":float(x.price_change_percentage_24h),"change_7d_pct":float(x.price_change_percentage_7d_in_currency),"btc_rel_7d_pct":float(x.btc_rel_7d),
+        rows.append({"coin":x["name"],"ticker":t,"id":x["id"],"market_cap_m":float(x.mcap_m),"volume_m":float(x.vol_m),"vol_mcap_pct":float(x.vr),"max_supply":float(x.max_supply) if pd.notna(x.max_supply) else None,"circulating_supply":float(x.circulating_supply) if pd.notna(x.circulating_supply) else None,"circulating_max_ratio":float(x.circulating_max_ratio) if pd.notna(x.circulating_max_ratio) else None,"change_24h_pct":float(x.price_change_percentage_24h),"change_7d_pct":float(x.price_change_percentage_7d_in_currency),"btc_rel_7d_pct":float(x.btc_rel_7d),
                      "rsi_1h":vals["1H"],"rsi_4h":vals["4H"],"rsi_1d":vals["1D"],"rsi_1w":vals["1W"],"rsi_1m":vals["1M"],"rsi_3m":vals["3M"],"weighted_rsi":wr,"rsi_valid_timeframes":len(valid_tfs),"rsi_quality_pct":rsi_quality,"rsi_source":rsi_source,"downside_beta":beta,"btc_down_day_rel_pct":downrel,"btc_down_day_outperform_pct":downhit,"technical_score":tech,"risk_adjusted_score":risk_adj,"breakout_confidence":confidence,"true_breakout":tb,"breakout_state":sig,"breakout_exchange":source,"breakout_pct":mm.get("breakout_distance_pct"),"breakout_volume_ratio":mm.get("volume_ratio"),"adx":mm.get("adx"),"plus_di":mm.get("pdi"),"minus_di":mm.get("mdi"),"stoch_k":mm.get("stoch_k"),"stoch_d":mm.get("stoch_d")})
     out=pd.DataFrame(rows).sort_values(["true_breakout","technical_score"],ascending=[False,False])
     breadth=float((c.price_change_percentage_24h>0).mean()*100)
@@ -391,7 +396,7 @@ def main():
     now=datetime.now(timezone.utc).isoformat(); clean=out.replace({np.nan:None})
     quality_counts={"pre_screen":len(pre),"ranked":len(out),"zero_rsi_rejected":len(rejected_zero_rsi),"rsi_6of6":int((out.rsi_valid_timeframes==6).sum()) if not out.empty else 0,"rsi_5plus":int((out.rsi_valid_timeframes>=5).sum()) if not out.empty else 0,"rsi_3plus":int((out.rsi_valid_timeframes>=3).sum()) if not out.empty else 0,"data_quality_warning":int((out.rsi_quality_pct<50).sum()) if not out.empty else 0}
     btc_payload={"signal":btc_signal,"price_usd":btc_price,"price_change_24h":btc24,"price_change_7d":btc7,"weighted_rsi":btc_wrsi,"rsi_valid_timeframes":len(btc_valid),"rsi_quality_pct":len(btc_valid)/6*100,"rsi_source":btc_rsi_source,"adx":btc_mm.get("adx"),"plus_di":btc_mm.get("pdi"),"minus_di":btc_mm.get("mdi"),"stoch_k":btc_mm.get("stoch_k"),"stoch_d":btc_mm.get("stoch_d"),"ema_bullish":btc_mm.get("ema_bullish"),"daily_breakout":btc_mm.get("daily_breakout"),"weekly_breakout":btc_mm.get("weekly_breakout"),"technical_score":technical_score(btc_mm,btc_wrsi,0,np.nan,len(btc_valid)/6*100),"dominance_pct":dom["current"],"dominance_change_1d":dom["change_1d"],"dominance_change_7d":dom["change_7d"],"dominance_trend":dom["trend"],"total3_btc_ratio":t3["ratio"],"total3_btc_change_1d_pct":t3["change_1d_pct"],"total3_btc_change_7d_pct":t3["change_7d_pct"],"total3_btc_trend":t3["trend"],"fear_greed_value":fg["value"],"fear_greed_classification":fg["classification"],"fear_greed_change_1d":fg["change_1d"]}
-    payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_price_usd":btc_price,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"btc_dominance_pct":dom["current"],"btc_dominance_change_1d":dom["change_1d"],"btc_dominance_change_7d":dom["change_7d"],"btc_dominance_trend":dom["trend"],"usdt_dominance_pct":ctx["usdt_dominance_pct"],"usdt_dominance_change_1d":ctx["usdt_dominance_change_1d"],"usdt_dominance_change_7d":ctx["usdt_dominance_change_7d"],"usdt_dominance_trend":ctx["usdt_dominance_trend"],"total3_btc_ratio":t3["ratio"],"total3_btc_change_1d_pct":t3["change_1d_pct"],"total3_btc_change_7d_pct":t3["change_7d_pct"],"total3_btc_trend":t3["trend"],"fear_greed_value":fg["value"],"fear_greed_classification":fg["classification"],"fear_greed_change_1d":fg["change_1d"],"candidate_count":len(c),"pre_screen_count":len(pre),"ranked_count":len(out),"exchange":primary_exchange,"data_quality":quality_counts},"btc_market":btc_payload,"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
+    payload={"meta":{"engine_version":VERSION,"generated_at":now,"regime":regime,"btc_price_usd":btc_price,"btc_24h":btc24,"btc_7d":btc7,"breadth":breadth,"btc_dominance_pct":dom["current"],"btc_dominance_change_1d":dom["change_1d"],"btc_dominance_change_7d":dom["change_7d"],"btc_dominance_trend":dom["trend"],"usdt_dominance_pct":ctx["usdt_dominance_pct"],"usdt_dominance_change_1d":ctx["usdt_dominance_change_1d"],"usdt_dominance_change_7d":ctx["usdt_dominance_change_7d"],"usdt_dominance_trend":ctx["usdt_dominance_trend"],"total3_btc_ratio":t3["ratio"],"total3_btc_change_1d_pct":t3["change_1d_pct"],"total3_btc_change_7d_pct":t3["change_7d_pct"],"total3_btc_trend":t3["trend"],"fear_greed_value":fg["value"],"fear_greed_classification":fg["classification"],"fear_greed_change_1d":fg["change_1d"],"candidate_count":len(c),"pre_screen_count":len(pre),"ranked_count":len(out),"low_supply_max":LOW_SUPPLY_MAX,"low_supply_min_circ_ratio":LOW_SUPPLY_MIN_CIRC_RATIO,"low_cap_min_mcap":LOW_CAP_MIN_MCAP_M,"low_cap_max_mcap":LOW_CAP_MAX_MCAP_M,"exchange":primary_exchange,"data_quality":quality_counts},"btc_market":btc_payload,"top10":clean.head(10).to_dict("records"),"all":clean.to_dict("records")}
     os.makedirs("data",exist_ok=True); open("data/latest_scan.json","w",encoding="utf-8").write(json.dumps(payload,indent=2,default=str))
 
     statefile="data/telegram_alert_state.json"; state=json.load(open(statefile,encoding="utf-8")) if os.path.exists(statefile) else {"keys":[],"last_states":{}}; keys=set(state.get("keys",[])); last_states=state.get("last_states",{}) or {}; sent=0
