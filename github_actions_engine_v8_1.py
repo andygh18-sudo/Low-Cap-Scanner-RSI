@@ -8,6 +8,7 @@ import ccxt
 VERSION = "v8.2.5"
 CG = "https://api.coingecko.com/api/v3"
 # Scanner universe: use the broad CoinGecko market universe; ranking handles liquidity/momentum.
+# Market discovery is resilient to CoinGecko access errors via CoinPaprika fallback.
 WEIGHTS = {"1H": .05, "4H": .10, "1D": .20, "1W": .25, "1M": .20, "3M": .20}
 CACHE = {}
 
