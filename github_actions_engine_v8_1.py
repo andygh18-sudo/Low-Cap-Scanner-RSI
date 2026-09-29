@@ -387,7 +387,9 @@ def btc_direction(btc24,btc7,wrsi,m,dom):
 
 def main():
     df=markets(); df["mcap_m"]=df.market_cap/1e6; df["vol_m"]=df.total_volume/1e6; df["vr"]=df.total_volume/df.market_cap*100
-    btc=df[df.id=="bitcoin"].iloc[0]; btc_price=float(btc.get("current_price",np.nan)); btc7=float(btc.get("price_change_percentage_7d_in_currency",0) or 0); btc24=float(btc.get("price_change_percentage_24h",0) or 0)
+    btc_rows=df[(df.id=="bitcoin") | (df.symbol.astype(str).str.upper()=="BTC")];
+    if btc_rows.empty: raise RuntimeError("Market universe does not contain BTC");
+    btc=btc_rows.iloc[0]; btc_price=float(btc.get("current_price",np.nan)); btc7=float(btc.get("price_change_percentage_7d_in_currency",0) or 0); btc24=float(btc.get("price_change_percentage_24h",0) or 0)
     ctx=market_context()
     dom={"current":ctx["dominance_pct"],"change_1d":ctx["dominance_change_1d"],"change_7d":ctx["dominance_change_7d"],"trend":ctx["dominance_trend"]}
     t3={"ratio":ctx["total3_btc_ratio"],"change_1d_pct":ctx["total3_btc_change_1d_pct"],"change_7d_pct":ctx["total3_btc_change_7d_pct"],"trend":ctx["total3_btc_trend"]}
