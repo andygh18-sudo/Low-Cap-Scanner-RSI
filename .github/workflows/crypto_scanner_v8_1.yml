@@ -2,6 +2,9 @@ name: Crypto Low-Cap Scanner v8.2.5
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "github_actions_engine_v8_1.py"
 
 permissions:
   contents: write
