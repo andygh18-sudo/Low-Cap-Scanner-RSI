@@ -391,7 +391,7 @@ def main():
     dom={"current":ctx["dominance_pct"],"change_1d":ctx["dominance_change_1d"],"change_7d":ctx["dominance_change_7d"],"trend":ctx["dominance_trend"]}
     t3={"ratio":ctx["total3_btc_ratio"],"change_1d_pct":ctx["total3_btc_change_1d_pct"],"change_7d_pct":ctx["total3_btc_change_7d_pct"],"trend":ctx["total3_btc_trend"]}
     fg=fear_greed()
-    stable={"tether","usd-coin","dai","usds","true-usd","usdd"}; c=df[~df.id.isin(stable)].copy(); c["circulating_max_ratio"]=np.where(c["max_supply"].notna() & (c["max_supply"]>0),c["circulating_supply"]/c["max_supply"],np.nan)
+    stable={"tether","usd-coin","dai","usds","true-usd","usdd","usdt-tether","usd-coin-usdc","dai-dai"}; stable_symbols={"USDT","USDC","DAI","USDS","TUSD","USDD","FDUSD","USDE","PYUSD","USDP","GUSD","FRAX","CRVUSD","USDB","USDL"}; c=df[~df.id.isin(stable) & ~df.symbol.astype(str).str.upper().isin(stable_symbols)].copy(); c["circulating_max_ratio"]=np.where(c["max_supply"].notna() & (c["max_supply"]>0),c["circulating_supply"]/c["max_supply"],np.nan)
     c["btc_rel_7d"]=c.price_change_percentage_7d_in_currency-btc7
     c["pre"]=np.clip(c.vr/25*20,0,20)+np.clip((c.price_change_percentage_24h+10)*.8,0,20)+np.clip((c.btc_rel_7d+10)*.4,0,20)+np.clip(c.vr/10,0,20)
     pre=c.sort_values("pre",ascending=False).head(60).copy()
