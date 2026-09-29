@@ -27,20 +27,68 @@ def cg_get(path, params=None):
     raise last
 
 def markets():
+    """Build the broad market universe with CoinGecko first and CoinPaprika fallback.
+    CoinGecko can return 403/429 from GitHub-hosted runners; market discovery must
+    not be a single point of failure for the scanner chain.
+    """
     frames=[]
-    for page in (1,2):
-        frames.append(pd.DataFrame(cg_get(
-            "coins/markets",
-            {
-                "vs_currency":"usd",
-                "order":"market_cap_desc",
-                "per_page":250,
-                "page":page,
-                "sparkline":"false",
-                "price_change_percentage":"24h,7d"
-            }
-        )))
-    return pd.concat(frames,ignore_index=True).drop_duplicates("id")
+    try:
+        for page in (1,2):
+            frames.append(pd.DataFrame(cg_get(
+                "coins/markets",
+                {
+                    "vs_currency":"usd",
+                    "order":"market_cap_desc",
+                    "per_page":250,
+                    "page":page,
+                    "sparkline":"false",
+                    "price_change_percentage":"24h,7d"
+                }
+            )))
+        out=pd.concat(frames,ignore_index=True).drop_duplicates("id")
+        if not out.empty:
+            print(f"Market universe source: CoinGecko ({len(out)} assets)")
+            return out
+    except Exception as e:
+        print(f"CoinGecko market universe unavailable: {type(e).__name__}: {e}")
+    
+    # Public fallback: CoinPaprika /tickers supplies market cap, volume,
+    # price and 24h/7d changes in a schema we normalize to the scanner fields.
+    try:
+        r=requests.get(
+            "https://api.coinpaprika.com/v1/tickers",
+            params={"quotes":"USD","limit":500},
+            headers={"accept":"application/json"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        rows=r.json()
+        normalized=[]
+        for x in rows if isinstance(rows,list) else []:
+            q=(x.get("quotes") or {}).get("USD") or {}
+            symbol=str(x.get("symbol") or "").upper()
+            normalized.append({
+                "id":x.get("id"),
+                "symbol":symbol,
+                "name":x.get("name") or symbol,
+                "current_price":q.get("price"),
+                "market_cap":q.get("market_cap"),
+                "total_volume":q.get("volume_24h"),
+                "price_change_percentage_24h":q.get("percent_change_24h"),
+                "price_change_percentage_7d_in_currency":q.get("percent_change_7d"),
+                "max_supply":x.get("max_supply"),
+                "circulating_supply":x.get("circulating_supply"),
+            })
+        out=pd.DataFrame(normalized)
+        out=out.dropna(subset=["id","symbol","market_cap","total_volume"]).drop_duplicates("id")
+        if not out.empty:
+            print(f"Market universe source: CoinPaprika fallback ({len(out)} assets)")
+            return out
+        raise ValueError("CoinPaprika returned no usable market rows")
+    except Exception as e:
+        raise RuntimeError(
+            f"All market-universe sources failed: CoinGecko and CoinPaprika. {type(e).__name__}: {e}"
+        )
 
 def market_context():
     """Return current BTC dominance and TOTAL3/BTC, plus changes from persisted hourly history.
