@@ -1,11 +1,5 @@
 [
   {
-    "ts": "2026-09-30T23:17:17.733731+00:00",
-    "btc_dominance_pct": 58.292578798177665,
-    "usdt_dominance_pct": 6.372954081778535,
-    "total3_btc_ratio": 0.5202492523826899
-  },
-  {
     "ts": "2026-09-30T23:22:10.896300+00:00",
     "btc_dominance_pct": NaN,
     "usdt_dominance_pct": 6.381246543230613,
@@ -2998,5 +2992,11 @@
     "btc_dominance_pct": 58.7516095265294,
     "usdt_dominance_pct": 6.253259340828755,
     "total3_btc_ratio": 0.5091447314321985
+  },
+  {
+    "ts": "2026-10-02T07:04:51.912513+00:00",
+    "btc_dominance_pct": 58.75652463067007,
+    "usdt_dominance_pct": 6.259229885724156,
+    "total3_btc_ratio": 0.5090776678869636
   }
 ]
